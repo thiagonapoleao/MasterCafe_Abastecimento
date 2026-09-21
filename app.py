@@ -39,6 +39,15 @@ st.markdown("""
             border-radius: 8px;
             margin-bottom: 1.2rem;
             color: #F8FAFC;
+            line-height: 1.6;
+        }
+        .info-card {
+            background-color: #1E293B;
+            border-left: 4px solid #0D6EFD;
+            padding: 12px 14px;
+            border-radius: 4px 8px 8px 4px;
+            margin: 12px 0;
+            color: #E2E8F0;
         }
         div.stButton > button:first-child {
             width: 100%;
@@ -62,16 +71,17 @@ st.markdown("""
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 
 def normalizar_texto(texto):
-    """Remove acentuações e espaços extras para busca de colunas."""
+    """Remove acentuações, caracteres especiais e coloca em minúsculo."""
     if not isinstance(texto, str):
         texto = str(texto)
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
     return texto.strip().lower()
 
 @st.cache_data(ttl=60)
-def carregar_clientes():
+def carregar_base_equipamentos():
     """
-    Carrega os clientes da aba 'Clientes' filtrando a coluna 'Nome Fantasia'.
+    Carrega os dados da aba 'Clientes' mapeando Equipamento, Nome Fantasia,
+    Produto e Endereço completo.
     """
     nome_aba = urllib.parse.quote("Clientes")
     url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_aba}"
@@ -83,24 +93,66 @@ def carregar_clientes():
             on_bad_lines="skip",
             dtype=str
         )
-
-        coluna_cliente = None
+        
+        # Mapeamento dinâmico de colunas
+        mapa_colunas = {}
         for col in df.columns:
-            if normalizar_texto(col) == "nome fantasia":
-                coluna_cliente = col
-                break
+            norm = normalizar_texto(col)
+            if norm == "equipamento":
+                mapa_colunas["equipamento"] = col
+            elif norm == "nome fantasia":
+                mapa_colunas["nome_fantasia"] = col
+            elif norm == "produto":
+                mapa_colunas["produto"] = col
+            elif norm == "endereco":
+                mapa_colunas["endereco"] = col
+            elif norm == "numero endereco":
+                mapa_colunas["numero"] = col
+            elif norm == "bairro":
+                mapa_colunas["bairro"] = col
+            elif norm == "municipio":
+                mapa_colunas["municipio"] = col
 
-        if coluna_cliente:
-            lista = df[coluna_cliente].dropna().astype(str).str.strip()
-            lista_filtrada = [item for item in lista.unique().tolist() if item != "" and item.lower() != "nan"]
-            lista_filtrada.sort()
-            return lista_filtrada
-        else:
-            return df.iloc[:, 0].dropna().unique().tolist()
+        # Garante que as colunas essenciais existem
+        col_eq = mapa_colunas.get("equipamento", "Equipamento")
+        col_cli = mapa_colunas.get("nome_fantasia", "Nome Fantasia")
+        col_prod = mapa_colunas.get("produto", "Produto")
+        col_end = mapa_colunas.get("endereco", "Endereço")
+        col_num = mapa_colunas.get("numero", "Numero Endereço")
+        col_bairro = mapa_colunas.get("bairro", "Bairro")
+        col_cidade = mapa_colunas.get("municipio", "Município")
 
+        # Filtra apenas linhas com equipamento preenchido
+        df = df[df[col_eq].notna()].copy()
+        df["equipamento_limpo"] = df[col_eq].astype(str).str.replace("*", "", regex=False).str.strip()
+
+        # Monta endereço amigável
+        def formatar_endereco(row):
+            partes = []
+            rua = str(row.get(col_end, "")).strip()
+            num = str(row.get(col_num, "")).strip()
+            bairro = str(row.get(col_bairro, "")).strip()
+            cidade = str(row.get(col_cidade, "")).strip()
+            
+            if rua and rua.lower() != "nan":
+                partes.append(rua)
+            if num and num.lower() != "nan" and num != "0":
+                partes.append(f"nº {num}")
+            if bairro and bairro.lower() != "nan":
+                partes.append(bairro)
+            if cidade and cidade.lower() != "nan":
+                partes.append(cidade)
+                
+            return " - ".join(partes) if partes else "Endereço não informado"
+
+        df["endereco_completo"] = df.apply(formatar_endereco, axis=1)
+        df["cliente_formatado"] = df[col_cli].fillna("Cliente não identificado").astype(str).str.strip()
+        df["produto_formatado"] = df[col_prod].fillna("Máquina não especificada").astype(str).str.strip()
+
+        return df
     except Exception as e:
-        st.error(f"Erro ao conectar com a planilha Google: {e}")
-        return []
+        st.error(f"Erro ao carregar dados da planilha Google: {e}")
+        return pd.DataFrame()
 
 # -------------------------------------------------------------
 # 3. FLUXO PRINCIPAL DO APLICATIVO
@@ -112,28 +164,61 @@ def main():
         st.session_state["visita_ativa"] = False
         st.session_state["dados_visita"] = {}
 
+    df_base = carregar_base_equipamentos()
+
     # ---------------------------------------------------------
     # ETAPA 1: CHECK-IN
     # ---------------------------------------------------------
     if not st.session_state["visita_ativa"]:
         st.subheader("1. Iniciar Atendimento (Check-in)")
 
-        lista_clientes = carregar_clientes()
+        nome_abastecedora = st.text_input("Nome da Abastecedora:", placeholder="Ex: Carla Silva").strip()
 
-        nome_abastecedora = st.text_input("Nome da Abastecedora:", placeholder="Ex: Maria Souza").strip()
-        cliente_escolhido = st.selectbox(
-            "Selecione o Cliente / Máquina:", 
-            lista_clientes if lista_clientes else ["Carregando clientes..."]
-        )
+        # Entrada por Número do Equipamento
+        num_equipamento_digitado = st.text_input(
+            "Digite o Número do Equipamento:", 
+            placeholder="Ex: 02020383, 102885, 3113..."
+        ).strip().replace("*", "")
 
-        st.caption("ℹ️ A geolocalização do aparelho será registrada automaticamente ao fazer o check-in.")
+        dados_maquina = None
+
+        if num_equipamento_digitado and not df_base.empty:
+            # Busca ignorando asteriscos ou zeros extras à esquerda
+            resultado = df_base[
+                (df_base["equipamento_limpo"].str.lower() == num_equipamento_digitado.lower()) |
+                (df_base["equipamento_limpo"].str.lstrip("0") == num_equipamento_digitado.lstrip("0"))
+            ]
+
+            if not resultado.empty:
+                linha = resultado.iloc[0]
+                dados_maquina = {
+                    "equipamento": linha["equipamento_limpo"],
+                    "cliente": linha["cliente_formatado"],
+                    "produto": linha["produto_formatado"],
+                    "endereco": linha["endereco_completo"]
+                }
+                
+                # Exibe o card com as informações encontradas
+                st.markdown(f"""
+                    <div class="info-card">
+                        <b>📍 Cliente:</b> {dados_maquina['cliente']}<br>
+                        <b>☕ Equipamento:</b> {dados_maquina['produto']} (Nº {dados_maquina['equipamento']})<br>
+                        <b>🏢 Endereço:</b> {dados_maquina['endereco']}
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.warning("⚠️ Equipamento não encontrado na base. Confira o número digitado.")
+
+        st.caption("ℹ️ A geolocalização do aparelho será capturada ao confirmar o check-in.")
         loc_checkin = get_geolocation()
 
-        if st.button("📍 Iniciar Visita (Check-in)"):
+        if st.button("📍 Confirmar Check-in"):
             if not nome_abastecedora:
-                st.error("Informe o nome da abastecedora para iniciar.")
-            elif not lista_clientes:
-                st.error("Aguarde o carregamento da lista de clientes da planilha.")
+                st.error("Informe o nome da abastecedora.")
+            elif not num_equipamento_digitado:
+                st.error("Digite o número do equipamento.")
+            elif not dados_maquina:
+                st.error("Não é possível iniciar: equipamento não localizado na planilha.")
             else:
                 coords = loc_checkin["coords"] if loc_checkin else None
                 lat = coords["latitude"] if coords else "GPS não detectado"
@@ -142,7 +227,10 @@ def main():
                 st.session_state["visita_ativa"] = True
                 st.session_state["dados_visita"] = {
                     "abastecedora": nome_abastecedora,
-                    "cliente": cliente_escolhido,
+                    "equipamento": dados_maquina["equipamento"],
+                    "cliente": dados_maquina["cliente"],
+                    "produto": dados_maquina["produto"],
+                    "endereco": dados_maquina["endereco"],
                     "data_checkin": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                     "geo_checkin": f"{lat}, {lon}"
                 }
@@ -154,12 +242,14 @@ def main():
     else:
         dados = st.session_state["dados_visita"]
 
+        # Cabeçalho com dados completos do atendimento
         st.markdown(f"""
             <div class="status-box">
                 <b>Abastecedora:</b> {dados['abastecedora']}<br>
                 <b>Cliente:</b> {dados['cliente']}<br>
-                <b>Check-in:</b> {dados['data_checkin']}<br>
-                <b>GPS Entrada:</b> {dados['geo_checkin']}
+                <b>Máquina:</b> {dados['produto']} (Nº {dados['equipamento']})<br>
+                <b>Endereço:</b> {dados['endereco']}<br>
+                <b>Check-in:</b> {dados['data_checkin']} | <b>GPS:</b> {dados['geo_checkin']}
             </div>
         """, unsafe_allow_html=True)
 
@@ -191,7 +281,7 @@ def main():
         loc_checkout = get_geolocation()
 
         if st.button("🏁 Realizar Check-out e Concluir"):
-            # Verificação segura da assinatura sem disparar RuntimeError
+            # Verificação segura de assinatura
             tem_assinatura = False
             try:
                 if canvas_result is not None and canvas_result.json_data is not None:
@@ -200,13 +290,12 @@ def main():
             except Exception:
                 tem_assinatura = False
 
-            # Validações dos campos
             if not foto_abastecida or not foto_limpa:
-                st.error("Tire as duas fotos (abastecimento e limpeza) antes de finalizar.")
+                st.error("Tire ambas as fotos (abastecimento e limpeza) antes de finalizar.")
             elif not responsavel:
                 st.error("Preencha o nome do responsável no cliente.")
             elif not tem_assinatura:
-                st.error("Por favor, colha a assinatura do cliente desenhando no quadro antes de concluir.")
+                st.error("Por favor, colha a assinatura do responsável no quadro.")
             else:
                 coords = loc_checkout["coords"] if loc_checkout else None
                 lat_out = coords["latitude"] if coords else "GPS não detectado"
@@ -216,7 +305,7 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # Salva localmente em arquivo de histórico
+                # Salva localmente o histórico em CSV
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
