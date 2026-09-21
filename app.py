@@ -73,7 +73,7 @@ SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 GID_USUARIOS = "1642053143"
 
 # URL do Webhook do Google Apps Script para salvar na aba "Visitas"
-WEBHOOK_URL = "COLE_AQUI_A_URL_DO_APP_DA_WEB_DO_APPS_SCRIPT"
+WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
 def normalizar_texto(texto):
     """Remove acentuações, caracteres especiais e coloca em minúsculo."""
