@@ -77,7 +77,7 @@ def carregar_dados_planilha():
 
     def ler_aba(nome_aba):
         nome_codificado = urllib.parse.quote(nome_aba)
-        url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_codificado}"
+        url = "https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_codificado}"
         return pd.read_csv(
             url,
             engine="python",
