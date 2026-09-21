@@ -59,7 +59,6 @@ st.markdown("""
 # -------------------------------------------------------------
 # 2. CONEXÃO COM A PLANILHA MASTER CAFÉ
 # -------------------------------------------------------------
-# ID configurado da planilha App_Abastecimento
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 
 def normalizar_texto(texto):
@@ -75,7 +74,6 @@ def carregar_clientes():
     Carrega os clientes da aba 'Clientes' filtrando a coluna 'Nome Fantasia'.
     """
     nome_aba = urllib.parse.quote("Clientes")
-    # Endpoint de exportação CSV com suporte a gid=0
     url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_aba}"
 
     try:
@@ -86,7 +84,6 @@ def carregar_clientes():
             dtype=str
         )
 
-        # Encontra a coluna Nome Fantasia ignorando maiúsculas e espaços
         coluna_cliente = None
         for col in df.columns:
             if normalizar_texto(col) == "nome fantasia":
@@ -94,19 +91,15 @@ def carregar_clientes():
                 break
 
         if coluna_cliente:
-            # Remove linhas vazias, espaços e duplicadas
             lista = df[coluna_cliente].dropna().astype(str).str.strip()
             lista_filtrada = [item for item in lista.unique().tolist() if item != "" and item.lower() != "nan"]
             lista_filtrada.sort()
             return lista_filtrada
         else:
-            # Fallback caso os cabeçalhos venham deslocados
-            st.warning("Coluna 'Nome Fantasia' não encontrada diretamente. Listando primeira coluna de texto válida.")
             return df.iloc[:, 0].dropna().unique().tolist()
 
     except Exception as e:
         st.error(f"Erro ao conectar com a planilha Google: {e}")
-        st.info("💡 Lembre-se de certificar que a planilha está com acesso geral configurado como 'Qualquer pessoa com o link pode ler'.")
         return []
 
 # -------------------------------------------------------------
@@ -198,12 +191,22 @@ def main():
         loc_checkout = get_geolocation()
 
         if st.button("🏁 Realizar Check-out e Concluir"):
+            # Verificação segura da assinatura sem disparar RuntimeError
+            tem_assinatura = False
+            try:
+                if canvas_result is not None and canvas_result.json_data is not None:
+                    objetos = canvas_result.json_data.get("objects", [])
+                    tem_assinatura = len(objetos) > 0
+            except Exception:
+                tem_assinatura = False
+
+            # Validações dos campos
             if not foto_abastecida or not foto_limpa:
                 st.error("Tire as duas fotos (abastecimento e limpeza) antes de finalizar.")
             elif not responsavel:
                 st.error("Preencha o nome do responsável no cliente.")
-            elif canvas_result.image_data is None:
-                st.error("Colha a assinatura do responsável no quadro.")
+            elif not tem_assinatura:
+                st.error("Por favor, colha a assinatura do cliente desenhando no quadro antes de concluir.")
             else:
                 coords = loc_checkout["coords"] if loc_checkout else None
                 lat_out = coords["latitude"] if coords else "GPS não detectado"
@@ -226,7 +229,6 @@ def main():
                 st.success("✅ Atendimento concluído e registrado com sucesso!")
                 st.balloons()
 
-                # Reseta para o próximo atendimento
                 st.session_state["visita_ativa"] = False
                 st.session_state["dados_visita"] = {}
 
