@@ -69,7 +69,7 @@ st.markdown("""
             font-size: 1.2rem;
             font-weight: 600;
             color: #F8FAFC;
-            margin-top: 15px;
+            margin-top: 20px;
             margin-bottom: 12px;
             border-bottom: 1px solid #334155;
             padding-bottom: 6px;
@@ -151,13 +151,12 @@ def carregar_dados_visitas():
 
     df["data_dia"] = df["dt_checkin"].dt.strftime("%d/%m/%Y")
     df["mes_ano"] = df["dt_checkin"].dt.strftime("%m/%Y")
-    df["hora_checkin"] = df["dt_checkin"].dt.strftime("%H:%M")
-    df["hora_checkout"] = df["dt_checkout"].dt.strftime("%H:%M")
+    df["hora_checkin"] = df["dt_checkin"].dt.strftime("%H:%M:%S")
+    df["hora_checkout"] = df["dt_checkout"].dt.strftime("%H:%M:%S")
 
     return df
 
 def excluir_visita(payload):
-    """Exclui da planilha online via Apps Script e do CSV local se existir."""
     payload["action"] = "delete"
     sucesso_online = False
 
@@ -169,7 +168,6 @@ def excluir_visita(payload):
         except Exception as e:
             st.error(f"Erro ao conectar com Google Sheets para excluir: {e}")
 
-    # Exclusão no CSV local de backup
     if os.path.exists("visitas_realizadas.csv"):
         try:
             df_local = pd.read_csv("visitas_realizadas.csv", dtype=str)
@@ -185,14 +183,13 @@ def excluir_visita(payload):
     return sucesso_online
 
 # -------------------------------------------------------------
-# 3. INTERFACE E ABAS PRINCIPAIS DO PAINEL
+# 3. INTERFACE E ABAS DO PAINEL
 # -------------------------------------------------------------
 st.title("☕ Master Café — Cockpit de Operações e Visitas")
 st.caption("Acompanhamento gerencial em tempo real de abastecimentos, produtividade e tempos de ciclo.")
 
 df_raw = carregar_dados_visitas()
 
-# ABAS PRINCIPAIS: VISÃO ANALÍTICA VS GESTÃO/EXCLUSÃO
 aba_cockpit, aba_exclusao = st.tabs(["📊 Visão Analítica & Indicadores", "🗑️ Gestão e Exclusão de Registros"])
 
 # -------------------------------------------------------------
@@ -265,7 +262,7 @@ with aba_cockpit:
             </div>
         """, unsafe_allow_html=True)
 
-    # Gráficos
+    # Gráficos Visuais
     st.markdown('<div class="block-header">📊 Indicadores de Eficiência e Tempo de Ciclo</div>', unsafe_allow_html=True)
     c_graf1, c_graf2 = st.columns(2)
 
@@ -298,19 +295,118 @@ with aba_cockpit:
         fig_line.update_layout(template="plotly_dark", plot_bgcolor="#1E293B", paper_bgcolor="#1E293B", xaxis_title="Data", yaxis_title="Total de Visitas", height=350)
         st.plotly_chart(fig_line, use_container_width=True)
 
-    # Tabelas Consolidadas
-    st.markdown('<div class="block-header">📈 Produção Consolidada por Abastecedor</div>', unsafe_allow_html=True)
+    # -------------------------------------------------------------
+    # 4. PRODUÇÃO CONSOLIDADA E DETALHAMENTO POR MÁQUINA
+    # -------------------------------------------------------------
+    st.markdown('<div class="block-header">📈 Produção Consolidada por Abastecedor e Detalhado por Máquina</div>', unsafe_allow_html=True)
     tab_mes, tab_dia = st.tabs(["📅 Consolidado por Mês", "🗓️ Consolidado por Dia"])
     
+    # Colunas padrão para o detalhamento por máquina
+    cols_detalhe = [
+        "abastecedor", "equipamento", "produto", "cliente", "endereco",
+        "data_dia", "hora_checkin", "hora_checkout", "duracao_minutos",
+        "geo_checkin", "geo_checkout", "responsavel"
+    ]
+    cols_existentes = [c for c in cols_detalhe if c in df.columns]
+
+    mapa_renomear = {
+        "abastecedor": "Abastecedor",
+        "equipamento": "Nº Máquina",
+        "produto": "Modelo / Produto",
+        "cliente": "Cliente",
+        "endereco": "Endereço",
+        "data_dia": "Data",
+        "hora_checkin": "Check-in (Hora)",
+        "hora_checkout": "Check-out (Hora)",
+        "duracao_minutos": "Duração (min)",
+        "geo_checkin": "GPS Check-in",
+        "geo_checkout": "GPS Check-out",
+        "responsavel": "Responsável (Assinatura)"
+    }
+
     with tab_mes:
-        df_mes = df.groupby(["mes_ano", "abastecedor"]).agg(total_visitas=("equipamento", "count"), clientes_unicos=("cliente", "nunique"), maquinas_unicas=("equipamento", "nunique"), tempo_medio=("duracao_minutos", "mean")).reset_index()
+        st.subheader("1. Resumo Mensal por Abastecedor")
+        df_mes = df.groupby(["mes_ano", "abastecedor"]).agg(
+            total_visitas=("equipamento", "count"),
+            clientes_unicos=("cliente", "nunique"),
+            maquinas_unicas=("equipamento", "nunique"),
+            tempo_medio=("duracao_minutos", "mean")
+        ).reset_index()
         df_mes["tempo_medio"] = df_mes["tempo_medio"].round(1)
-        st.dataframe(df_mes.rename(columns={"mes_ano": "Mês/Ano", "abastecedor": "Abastecedor", "total_visitas": "Total Atendimentos", "clientes_unicos": "Clientes Distintos", "maquinas_unicas": "Máquinas Distintas", "tempo_medio": "Tempo Médio (min)"}), use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_mes.rename(columns={
+                "mes_ano": "Mês/Ano",
+                "abastecedor": "Abastecedor",
+                "total_visitas": "Total Atendimentos",
+                "clientes_unicos": "Clientes Distintos",
+                "maquinas_unicas": "Máquinas Distintas",
+                "tempo_medio": "Tempo Médio (min)"
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader("2. Detalhado Mensal por Máquina (Horários e Geolocalização)")
+        
+        # Filtro opcional de mês e abastecedor para focar a consulta
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            meses_disp = sorted(df["mes_ano"].dropna().unique().tolist(), reverse=True)
+            mes_sel = st.selectbox("Selecione o Mês/Ano:", options=["Todos"] + meses_disp, key="sel_mes_det")
+        with col_m2:
+            abast_mes_disp = sorted(df["abastecedor"].dropna().unique().tolist())
+            abast_mes_sel = st.selectbox("Selecione o Abastecedor:", options=["Todos"] + abast_mes_disp, key="sel_abast_mes_det")
+
+        df_det_mes = df.copy()
+        if mes_sel != "Todos":
+            df_det_mes = df_det_mes[df_det_mes["mes_ano"] == mes_sel]
+        if abast_mes_sel != "Todos":
+            df_det_mes = df_det_mes[df_det_mes["abastecedor"] == abast_mes_sel]
+
+        df_det_mes_view = df_det_mes[cols_existentes].rename(columns=mapa_renomear)
+        st.dataframe(df_det_mes_view, use_container_width=True, hide_index=True)
 
     with tab_dia:
-        df_dia = df.groupby(["data_dia", "abastecedor"]).agg(total_visitas=("equipamento", "count"), clientes_unicos=("cliente", "nunique"), maquinas_unicas=("equipamento", "nunique"), tempo_medio=("duracao_minutos", "mean")).reset_index()
+        st.subheader("1. Resumo Diário por Abastecedor")
+        df_dia = df.groupby(["data_dia", "abastecedor"]).agg(
+            total_visitas=("equipamento", "count"),
+            clientes_unicos=("cliente", "nunique"),
+            maquinas_unicas=("equipamento", "nunique"),
+            tempo_medio=("duracao_minutos", "mean")
+        ).reset_index()
         df_dia["tempo_medio"] = df_dia["tempo_medio"].round(1)
-        st.dataframe(df_dia.rename(columns={"data_dia": "Data", "abastecedor": "Abastecedor", "total_visitas": "Total Atendimentos", "clientes_unicos": "Clientes Distintos", "maquinas_unicas": "Máquinas Distintas", "tempo_medio": "Tempo Médio (min)"}), use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_dia.rename(columns={
+                "data_dia": "Data",
+                "abastecedor": "Abastecedor",
+                "total_visitas": "Total Atendimentos",
+                "clientes_unicos": "Clientes Distintos",
+                "maquinas_unicas": "Máquinas Distintas",
+                "tempo_medio": "Tempo Médio (min)"
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader("2. Detalhado Diário por Máquina (Horários e Geolocalização)")
+        
+        # Filtro opcional de dia e abastecedor para focar a consulta
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            dias_disp = sorted(df["data_dia"].dropna().unique().tolist(), reverse=True)
+            dia_sel = st.selectbox("Selecione a Data (Dia):", options=["Todas"] + dias_disp, key="sel_dia_det")
+        with col_d2:
+            abast_dia_disp = sorted(df["abastecedor"].dropna().unique().tolist())
+            abast_dia_sel = st.selectbox("Selecione o Abastecedor:", options=["Todos"] + abast_dia_disp, key="sel_abast_dia_det")
+
+        df_det_dia = df.copy()
+        if dia_sel != "Todas":
+            df_det_dia = df_det_dia[df_det_dia["data_dia"] == dia_sel]
+        if abast_dia_sel != "Todos":
+            df_det_dia = df_det_dia[df_det_dia["abastecedor"] == abast_dia_sel]
+
+        df_det_dia_view = df_det_dia[cols_existentes].rename(columns=mapa_renomear)
+        st.dataframe(df_det_dia_view, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
 # ABA 2: GESTÃO E EXCLUSÃO DE DADOS LANÇADOS
@@ -340,7 +436,6 @@ with aba_exclusao:
     if df_del.empty:
         st.info("Nenhum lançamento encontrado com os filtros selecionados.")
     else:
-        # Monta um identificador amigável para seleção da visita a excluir
         df_del["label_exclusao"] = df_del.apply(
             lambda r: f"Data: {r['data_checkin']} | {r['abastecedor']} | Cliente: {r['cliente']} | Máq: {r['equipamento']}",
             axis=1
@@ -361,6 +456,7 @@ with aba_exclusao:
                 <b>Equipamento:</b> {linha_sel['produto']} (Nº {linha_sel['equipamento']})<br>
                 <b>Endereço:</b> {linha_sel['endereco']}<br>
                 <b>Check-in:</b> {linha_sel['data_checkin']} | <b>Check-out:</b> {linha_sel['data_checkout']}<br>
+                <b>GPS Entrada:</b> {linha_sel.get('geo_checkin', 'Não detectado')} | <b>GPS Saída:</b> {linha_sel.get('geo_checkout', 'Não detectado')}<br>
                 <b>Responsável no local:</b> {linha_sel['responsavel']}
             </div>
         """, unsafe_allow_html=True)
