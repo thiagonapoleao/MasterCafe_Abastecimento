@@ -8,7 +8,7 @@ from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
 
 # -------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA PÁGINA E ESTILO (DARK MODE / CORPORATIVO)
+# 1. CONFIGURAÇÃO DA PÁGINA E DESIGN (DARK MODE / CORPORATIVO)
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="Master Café - Gestão de Visitas",
@@ -57,13 +57,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. CONEXÃO COM A PLANILHA GOOGLE (ABA "Clientes")
+# 2. CONEXÃO COM A PLANILHA MASTER CAFÉ
 # -------------------------------------------------------------
-# ATENÇÃO: Coloque aqui o ID real da sua planilha App_Abastecimento
-SPREADSHEET_ID = "COLE_O_ID_DA_SUA_PLANILHA_AQUI"
+# ID configurado da planilha App_Abastecimento
+SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 
 def normalizar_texto(texto):
-    """Remove acentos, espaços extras e coloca em minúsculo."""
+    """Remove acentuações e espaços extras para busca de colunas."""
     if not isinstance(texto, str):
         texto = str(texto)
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
@@ -72,13 +72,10 @@ def normalizar_texto(texto):
 @st.cache_data(ttl=60)
 def carregar_clientes():
     """
-    Lê a aba 'Clientes' da planilha Google de forma resiliente a quebras de linha e vírgulas.
+    Carrega os clientes da aba 'Clientes' filtrando a coluna 'Nome Fantasia'.
     """
-    if SPREADSHEET_ID == "COLE_O_ID_DA_SUA_PLANILHA_AQUI" or len(SPREADSHEET_ID) < 15:
-        st.error("⚠️ Configure o SPREADSHEET_ID no código com o ID real da sua planilha.")
-        return []
-
     nome_aba = urllib.parse.quote("Clientes")
+    # Endpoint de exportação CSV com suporte a gid=0
     url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_aba}"
 
     try:
@@ -88,30 +85,36 @@ def carregar_clientes():
             on_bad_lines="skip",
             dtype=str
         )
-        # Limpa espaços nas colunas
-        df.columns = [str(c).strip() for c in df.columns]
 
-        # Localiza a coluna "Nome fantasia" (com ou sem acento/maiúsculas)
-        col_cliente = next((c for c in df.columns if normalizar_texto(c) == "nome fantasia"), None)
+        # Encontra a coluna Nome Fantasia ignorando maiúsculas e espaços
+        coluna_cliente = None
+        for col in df.columns:
+            if normalizar_texto(col) == "nome fantasia":
+                coluna_cliente = col
+                break
 
-        if col_cliente:
-            clientes = df[col_cliente].dropna().unique().tolist()
-            return [c.strip() for c in clientes if str(c).strip() != ""]
+        if coluna_cliente:
+            # Remove linhas vazias, espaços e duplicadas
+            lista = df[coluna_cliente].dropna().astype(str).str.strip()
+            lista_filtrada = [item for item in lista.unique().tolist() if item != "" and item.lower() != "nan"]
+            lista_filtrada.sort()
+            return lista_filtrada
         else:
-            # Fallback: pega a primeira coluna caso o nome não seja exatamente 'Nome fantasia'
+            # Fallback caso os cabeçalhos venham deslocados
+            st.warning("Coluna 'Nome Fantasia' não encontrada diretamente. Listando primeira coluna de texto válida.")
             return df.iloc[:, 0].dropna().unique().tolist()
 
     except Exception as e:
-        st.error(f"Erro ao ler os clientes da planilha Google: {e}")
+        st.error(f"Erro ao conectar com a planilha Google: {e}")
+        st.info("💡 Lembre-se de certificar que a planilha está com acesso geral configurado como 'Qualquer pessoa com o link pode ler'.")
         return []
 
 # -------------------------------------------------------------
-# 3. APLICAÇÃO PRINCIPAL - FLUXO DE VISITAS
+# 3. FLUXO PRINCIPAL DO APLICATIVO
 # -------------------------------------------------------------
 def main():
     st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controle de Visitas e Abastecimento</p></div>', unsafe_allow_html=True)
 
-    # Inicializa variáveis da visita no estado da sessão
     if "visita_ativa" not in st.session_state:
         st.session_state["visita_ativa"] = False
         st.session_state["dados_visita"] = {}
@@ -123,18 +126,21 @@ def main():
         st.subheader("1. Iniciar Atendimento (Check-in)")
 
         lista_clientes = carregar_clientes()
-        if not lista_clientes:
-            lista_clientes = ["Nenhum cliente carregado da planilha"]
 
-        nome_abastecedora = st.text_input("Nome da Abastecedora:", placeholder="Ex: Carla Silva").strip()
-        cliente_escolhido = st.selectbox("Selecione o Cliente / Ponto:", lista_clientes)
+        nome_abastecedora = st.text_input("Nome da Abastecedora:", placeholder="Ex: Maria Souza").strip()
+        cliente_escolhido = st.selectbox(
+            "Selecione o Cliente / Máquina:", 
+            lista_clientes if lista_clientes else ["Carregando clientes..."]
+        )
 
-        st.caption("ℹ️ A geolocalização do aparelho será capturada ao confirmar o check-in.")
+        st.caption("ℹ️ A geolocalização do aparelho será registrada automaticamente ao fazer o check-in.")
         loc_checkin = get_geolocation()
 
-        if st.button("📍 Confirmar Check-in"):
+        if st.button("📍 Iniciar Visita (Check-in)"):
             if not nome_abastecedora:
-                st.error("Por favor, preencha o nome da abastecedora antes de iniciar.")
+                st.error("Informe o nome da abastecedora para iniciar.")
+            elif not lista_clientes:
+                st.error("Aguarde o carregamento da lista de clientes da planilha.")
             else:
                 coords = loc_checkin["coords"] if loc_checkin else None
                 lat = coords["latitude"] if coords else "GPS não detectado"
@@ -150,7 +156,7 @@ def main():
                 st.rerun()
 
     # ---------------------------------------------------------
-    # ETAPA 2: CHECK-OUT E COMPROVAÇÃO DO SERVIÇO
+    # ETAPA 2: CHECK-OUT E COMPROVAÇÕES
     # ---------------------------------------------------------
     else:
         dados = st.session_state["dados_visita"]
@@ -159,7 +165,7 @@ def main():
             <div class="status-box">
                 <b>Abastecedora:</b> {dados['abastecedora']}<br>
                 <b>Cliente:</b> {dados['cliente']}<br>
-                <b>Horário Check-in:</b> {dados['data_checkin']}<br>
+                <b>Check-in:</b> {dados['data_checkin']}<br>
                 <b>GPS Entrada:</b> {dados['geo_checkin']}
             </div>
         """, unsafe_allow_html=True)
@@ -173,7 +179,7 @@ def main():
             st.caption("2. Máquina Limpa:")
             foto_limpa = st.camera_input("Foto Limpa", key="foto_limp")
 
-        st.subheader("Assinatura do Cliente Responsável")
+        st.subheader("Assinatura do Responsável")
         responsavel = st.text_input("Nome do responsável no local:").strip()
 
         st.caption("Assine no quadro abaixo:")
@@ -193,7 +199,7 @@ def main():
 
         if st.button("🏁 Realizar Check-out e Concluir"):
             if not foto_abastecida or not foto_limpa:
-                st.error("Tire ambas as fotos (máquina abastecida e limpa) para finalizar.")
+                st.error("Tire as duas fotos (abastecimento e limpeza) antes de finalizar.")
             elif not responsavel:
                 st.error("Preencha o nome do responsável no cliente.")
             elif canvas_result.image_data is None:
@@ -207,7 +213,7 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # Grava no histórico CSV
+                # Salva localmente em arquivo de histórico
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
@@ -217,7 +223,7 @@ def main():
                     index=False
                 )
 
-                st.success("✅ Visita finalizada e registrada com sucesso!")
+                st.success("✅ Atendimento concluído e registrado com sucesso!")
                 st.balloons()
 
                 # Reseta para o próximo atendimento
