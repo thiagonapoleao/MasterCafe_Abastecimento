@@ -69,6 +69,7 @@ st.markdown("""
 # 2. CONEXÃO COM A PLANILHA MASTER CAFÉ
 # -------------------------------------------------------------
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
+GID_USUARIOS = "1642053143"  # GID específico da aba de logins
 
 def normalizar_texto(texto):
     """Remove acentuações, caracteres especiais e coloca em minúsculo."""
@@ -76,6 +77,35 @@ def normalizar_texto(texto):
         texto = str(texto)
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
     return texto.strip().lower()
+
+@st.cache_data(ttl=60)
+def carregar_usuarios():
+    """
+    Carrega os dados de login da aba de usuários usando o GID 1642053143.
+    """
+    url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid={GID_USUARIOS}"
+    try:
+        df = pd.read_csv(
+            url,
+            engine="python",
+            on_bad_lines="skip",
+            dtype=str
+        )
+        df.columns = [normalizar_texto(c) for c in df.columns]
+
+        # Garante a existência das colunas
+        if "usuario" in df.columns and "senha" in df.columns:
+            df["usuario"] = df["usuario"].fillna("").astype(str).str.strip().str.lower()
+            df["senha"] = df["senha"].fillna("").astype(str).str.strip()
+            if "nome" not in df.columns:
+                df["nome"] = df["usuario"]
+            else:
+                df["nome"] = df["nome"].fillna(df["usuario"]).astype(str).str.strip()
+            return df
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Erro ao carregar usuários da planilha: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def carregar_base_equipamentos():
@@ -94,7 +124,6 @@ def carregar_base_equipamentos():
             dtype=str
         )
         
-        # Mapeamento dinâmico de colunas
         mapa_colunas = {}
         for col in df.columns:
             norm = normalizar_texto(col)
@@ -113,7 +142,6 @@ def carregar_base_equipamentos():
             elif norm == "municipio":
                 mapa_colunas["municipio"] = col
 
-        # Garante que as colunas essenciais existem
         col_eq = mapa_colunas.get("equipamento", "Equipamento")
         col_cli = mapa_colunas.get("nome_fantasia", "Nome Fantasia")
         col_prod = mapa_colunas.get("produto", "Produto")
@@ -122,11 +150,9 @@ def carregar_base_equipamentos():
         col_bairro = mapa_colunas.get("bairro", "Bairro")
         col_cidade = mapa_colunas.get("municipio", "Município")
 
-        # Filtra apenas linhas com equipamento preenchido
         df = df[df[col_eq].notna()].copy()
         df["equipamento_limpo"] = df[col_eq].astype(str).str.replace("*", "", regex=False).str.strip()
 
-        # Monta endereço amigável
         def formatar_endereco(row):
             partes = []
             rua = str(row.get(col_end, "")).strip()
@@ -155,9 +181,54 @@ def carregar_base_equipamentos():
         return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 3. FLUXO PRINCIPAL DO APLICATIVO
+# 3. TELA DE LOGIN
+# -------------------------------------------------------------
+def tela_login(df_usuarios):
+    st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Portal de Abastecimento</p></div>', unsafe_allow_html=True)
+    
+    with st.form("form_login"):
+        st.subheader("Identificação do Abastecedor")
+        usuario_digitado = st.text_input("Usuário:").strip().lower()
+        senha_digitada = st.text_input("Senha:", type="password").strip()
+        btn_login = st.form_submit_button("Entrar no Sistema")
+        
+        if btn_login:
+            if df_usuarios.empty:
+                st.error("Não foi possível carregar a lista de usuários da planilha.")
+                return
+
+            usuario_valido = df_usuarios[
+                (df_usuarios["usuario"] == usuario_digitado) & 
+                (df_usuarios["senha"] == senha_digitada)
+            ]
+
+            if not usuario_valido.empty:
+                nome_colaborador = usuario_valido.iloc[0]["nome"]
+                st.session_state["autenticado"] = True
+                st.session_state["usuario_logado"] = usuario_digitado
+                st.session_state["nome_abastecedor"] = nome_colaborador
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+
+# -------------------------------------------------------------
+# 4. FLUXO PRINCIPAL DO APLICATIVO
 # -------------------------------------------------------------
 def main():
+    df_usuarios = carregar_usuarios()
+
+    # Controle de Autenticação
+    if not st.session_state.get("autenticado", False):
+        tela_login(df_usuarios)
+        return
+
+    # Barra lateral de perfil
+    with st.sidebar:
+        st.write(f"👤 **Abastecedor(a):**\n### {st.session_state.get('nome_abastecedor')}")
+        if st.button("🚪 Sair do Sistema"):
+            st.session_state.clear()
+            st.rerun()
+
     st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controle de Visitas e Abastecimento</p></div>', unsafe_allow_html=True)
 
     if "visita_ativa" not in st.session_state:
@@ -172,9 +243,8 @@ def main():
     if not st.session_state["visita_ativa"]:
         st.subheader("1. Iniciar Atendimento (Check-in)")
 
-        nome_abastecedora = st.text_input("Nome da Abastecedora:", placeholder="Ex: Carla Silva").strip()
+        st.info(f"Operador ativo: **{st.session_state['nome_abastecedor']}**")
 
-        # Entrada por Número do Equipamento
         num_equipamento_digitado = st.text_input(
             "Digite o Número do Equipamento:", 
             placeholder="Ex: 02020383, 102885, 3113..."
@@ -183,7 +253,6 @@ def main():
         dados_maquina = None
 
         if num_equipamento_digitado and not df_base.empty:
-            # Busca ignorando asteriscos ou zeros extras à esquerda
             resultado = df_base[
                 (df_base["equipamento_limpo"].str.lower() == num_equipamento_digitado.lower()) |
                 (df_base["equipamento_limpo"].str.lstrip("0") == num_equipamento_digitado.lstrip("0"))
@@ -198,7 +267,6 @@ def main():
                     "endereco": linha["endereco_completo"]
                 }
                 
-                # Exibe o card com as informações encontradas
                 st.markdown(f"""
                     <div class="info-card">
                         <b>📍 Cliente:</b> {dados_maquina['cliente']}<br>
@@ -209,13 +277,11 @@ def main():
             else:
                 st.warning("⚠️ Equipamento não encontrado na base. Confira o número digitado.")
 
-        st.caption("ℹ️ A geolocalização do aparelho será capturada ao confirmar o check-in.")
+        st.caption("ℹ️ A geolocalização do aparelho será registrada automaticamente ao confirmar.")
         loc_checkin = get_geolocation()
 
         if st.button("📍 Confirmar Check-in"):
-            if not nome_abastecedora:
-                st.error("Informe o nome da abastecedora.")
-            elif not num_equipamento_digitado:
+            if not num_equipamento_digitado:
                 st.error("Digite o número do equipamento.")
             elif not dados_maquina:
                 st.error("Não é possível iniciar: equipamento não localizado na planilha.")
@@ -226,7 +292,7 @@ def main():
 
                 st.session_state["visita_ativa"] = True
                 st.session_state["dados_visita"] = {
-                    "abastecedora": nome_abastecedora,
+                    "abastecedor": st.session_state["nome_abastecedor"],
                     "equipamento": dados_maquina["equipamento"],
                     "cliente": dados_maquina["cliente"],
                     "produto": dados_maquina["produto"],
@@ -242,10 +308,9 @@ def main():
     else:
         dados = st.session_state["dados_visita"]
 
-        # Cabeçalho com dados completos do atendimento
         st.markdown(f"""
             <div class="status-box">
-                <b>Abastecedora:</b> {dados['abastecedora']}<br>
+                <b>Abastecedor:</b> {dados['abastecedor']}<br>
                 <b>Cliente:</b> {dados['cliente']}<br>
                 <b>Máquina:</b> {dados['produto']} (Nº {dados['equipamento']})<br>
                 <b>Endereço:</b> {dados['endereco']}<br>
@@ -281,7 +346,6 @@ def main():
         loc_checkout = get_geolocation()
 
         if st.button("🏁 Realizar Check-out e Concluir"):
-            # Verificação segura de assinatura
             tem_assinatura = False
             try:
                 if canvas_result is not None and canvas_result.json_data is not None:
@@ -305,7 +369,7 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # Salva localmente o histórico em CSV
+                # Salva localmente em histórico CSV
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
