@@ -1,31 +1,25 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from PIL import Image
-import io
 import os
-
-# Componentes de Canvas (Assinatura) e JS (Geolocalização)
 from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
 
 # -------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA PÁGINA E DESIGN
+# CONFIGURAÇÃO GERAL E DESIGN
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="Master Café - Gestão de Visitas",
     page_icon="☕",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    layout="centered"
 )
 
-# Customização CSS para layout corporativo moderno e botões destacados
+# Estilo Escuro / Corporativo
 st.markdown("""
     <style>
-        .block-container {
-            padding-top: 1.5rem;
-            padding-bottom: 2rem;
-            max-width: 650px;
+        .stApp {
+            background-color: #0F172A;
+            color: #F8FAFC;
         }
         .main-header {
             text-align: center;
@@ -36,206 +30,192 @@ st.markdown("""
             margin-bottom: 1.5rem;
         }
         .status-box {
-            background-color: rgba(30, 41, 59, 0.7);
+            background-color: #1E293B;
             border: 1px solid #334155;
             padding: 14px;
             border-radius: 8px;
             margin-bottom: 1rem;
+            color: #F8FAFC;
         }
         div.stButton > button:first-child {
             width: 100%;
             border-radius: 8px;
             height: 48px;
             font-weight: bold;
+            background-color: #0D6EFD;
+            color: white;
         }
     </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. AUTENTICAÇÃO DAS ABASTECEDORAS
+# CONEXÃO COM A PLANILHA GOOGLE
 # -------------------------------------------------------------
-USUARIOS = {
-    "abastecedora1": {"senha": "123", "nome": "Carla Abastecedora"},
-    "abastecedora2": {"senha": "123", "nome": "Mariana Operações"},
-    "admin": {"senha": "admin", "nome": "Supervisão Master Café"}
-}
+# Cole aqui o ID da sua planilha (o código longo que fica entre /d/ e /edit no link)
+# Exemplo de URL: https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit
+SPREADSHEET_ID = "COLE_O_ID_DA_SUA_PLANILHA_AQUI"
 
-def tela_login():
-    st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Portal de Abastecimento e Visitas</p></div>', unsafe_allow_html=True)
+@st.cache_data(ttl=60)  # Atualiza os dados a cada 60 segundos
+def carregar_dados_planilha():
+    """
+    Lê as abas 'Clientes' e 'Usuarios' direto da planilha pública/leitor.
+    """
+    try:
+        url_clientes = "https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?gid=0#gid=0"
+        url_usuarios = "https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?gid=1642053143#gid=1642053143"
+        
+        df_clientes = pd.read_csv(url_clientes)
+        df_usuarios = pd.read_csv(url_usuarios)
+        
+        # Limpar espaços e converter para string
+        df_usuarios['usuario'] = df_usuarios['usuario'].astype(str).str.strip().str.lower()
+        df_usuarios['senha'] = df_usuarios['senha'].astype(str).str.strip()
+        
+        return df_clientes, df_usuarios
+    except Exception as e:
+        st.error(f"Erro ao acessar a planilha Google: {e}")
+        return pd.DataFrame(), pd.DataFrame()
+
+# -------------------------------------------------------------
+# TELA DE LOGIN DINÂMICA
+# -------------------------------------------------------------
+def tela_login(df_usuarios):
+    st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Portal de Abastecimento</p></div>', unsafe_allow_html=True)
     
     with st.form("form_login"):
-        st.subheader("Login da Operadora")
-        usuario = st.text_input("Usuário").strip().lower()
-        senha = st.text_input("Senha", type="password")
+        st.subheader("Acesso da Abastecedora")
+        usuario_input = st.text_input("Usuário").strip().lower()
+        senha_input = st.text_input("Senha", type="password").strip()
         btn_entrar = st.form_submit_button("Entrar no Sistema")
         
         if btn_entrar:
-            if usuario in USUARIOS and USUARIOS[usuario]["senha"] == senha:
+            if df_usuarios.empty:
+                st.error("Não foi possível carregar a lista de usuários da planilha.")
+                return
+
+            # Procura usuário e senha correspondentes na aba 'Usuarios'
+            valido = df_usuarios[(df_usuarios['usuario'] == usuario_input) & (df_usuarios['senha'] == senha_input)]
+            
+            if not valido.empty:
+                nome_col = valido.iloc[0]['nome'] if 'nome' in valido.columns else usuario_input
                 st.session_state["autenticado"] = True
-                st.session_state["usuario"] = usuario
-                st.session_state["nome_usuario"] = USUARIOS[usuario]["nome"]
+                st.session_state["usuario"] = usuario_input
+                st.session_state["nome_usuario"] = nome_col
                 st.rerun()
             else:
-                st.error("Credenciais inválidas. Tente novamente.")
+                st.error("Usuário ou senha incorretos. Verifique a planilha.")
 
 # -------------------------------------------------------------
-# 3. CARREGAMENTO DA PLANILHA GOOGLE
-# -------------------------------------------------------------
-@st.cache_data(ttl=300)
-def carregar_clientes():
-    """
-    Carrega a lista da planilha 'App_Abastecimento - Google Planilhas', aba 'Clientes'.
-    Caso as credenciais de API do Google não estejam ativas, utiliza um arquivo local de fallback.
-    """
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        
-        # Procura por credenciais do Google na raiz ou nos segredos do Streamlit
-        if os.path.exists("google_credentials.json"):
-            escopos = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-            creds = Credentials.from_service_account_file("google_credentials.json", scopes=escopos)
-            gc = gspread.authorize(creds)
-            planilha = gc.open("App_Abastecimento")
-            aba = planilha.worksheet("Clientes")
-            df = pd.DataFrame(aba.get_all_records())
-        else:
-            # Fallback simulado ou arquivo local caso a chave da API ainda não esteja configurada
-            df = pd.DataFrame({
-                "Nome fantasia": [
-                    "Empresa Alfa - Centro",
-                    "Hospital São Lucas - Térreo",
-                    "Tech Solutions - Sala VIP",
-                    "Academia Iron - Recepção",
-                    "Advocacia Ribeiro & Associados"
-                ]
-            })
-        return df["Nome fantasia"].dropna().unique().tolist()
-    except Exception as e:
-        st.warning(f"Aviso de sincronização: {e}. Usando dados de contingência.")
-        return [
-            "Empresa Alfa - Centro",
-            "Hospital São Lucas - Térreo",
-            "Tech Solutions - Sala VIP",
-            "Academia Iron - Recepção"
-        ]
-
-# -------------------------------------------------------------
-# 4. APLICAÇÃO PRINCIPAL E FLUXO DE VISITA
+# FLUXO PRINCIPAL DE VISITAS
 # -------------------------------------------------------------
 def main():
-    if "autenticado" not in st.session_state or not st.session_state["autenticado"]:
-        tela_login()
+    df_clientes, df_usuarios = carregar_dados_planilha()
+
+    # Se não autenticado, mostra o formulário de login
+    if not st.session_state.get("autenticado", False):
+        tela_login(df_usuarios)
         return
 
-    # Inicialização do estado de visita
+    # Inicializa variáveis da visita
     if "visita_ativa" not in st.session_state:
         st.session_state["visita_ativa"] = False
         st.session_state["dados_visita"] = {}
 
-    # Barra lateral de controle
+    # Menu lateral
     with st.sidebar:
-        st.write(f"👤 **Operadora:** {st.session_state['nome_usuario']}")
-        if st.button("Sair da Conta"):
+        st.write(f"👤 **Abastecedora:** {st.session_state['nome_usuario']}")
+        if st.button("Sair"):
             st.session_state.clear()
             st.rerun()
 
-    st.markdown('<div class="main-header"><h3>Master Café ☕</h3><p>Controle de Visitas e Abastecimento</p></div>', unsafe_allow_html=True)
-    
-    lista_clientes = carregar_clientes()
+    st.markdown('<div class="main-header"><h3>Master Café ☕</h3><p>Registro de Visita</p></div>', unsafe_allow_html=True)
 
-    # Fluxo 1: Iniciar Visita (Check-in)
+    # 1. CHECK-IN
     if not st.session_state["visita_ativa"]:
-        st.subheader("Iniciar Atendimento")
+        st.subheader("1. Iniciar Atendimento (Check-in)")
         
-        cliente_escolhido = st.selectbox("Selecione o Cliente / Ponto:", lista_clientes)
+        if not df_clientes.empty and "Nome fantasia" in df_clientes.columns:
+            lista_clientes = df_clientes["Nome fantasia"].dropna().unique().tolist()
+        else:
+            lista_clientes = ["Nenhum cliente encontrado na coluna 'Nome fantasia'"]
+
+        cliente_escolhido = st.selectbox("Selecione o Cliente / Máquina:", lista_clientes)
         
-        st.info("A geolocalização do dispositivo será associada ao registro de entrada.")
+        st.caption("Aguarde a leitura do GPS do aparelho antes de clicar.")
         loc_checkin = get_geolocation()
 
-        if st.button("📍 Realizar Check-in"):
+        if st.button("📍 Confirmar Check-in"):
             coords = loc_checkin["coords"] if loc_checkin else None
-            lat = coords["latitude"] if coords else "Não identificada"
-            lon = coords["longitude"] if coords else "Não identificada"
+            lat = coords["latitude"] if coords else "Sem GPS"
+            lon = coords["longitude"] if coords else "Sem GPS"
 
             st.session_state["visita_ativa"] = True
             st.session_state["dados_visita"] = {
                 "cliente": cliente_escolhido,
                 "operadora": st.session_state["nome_usuario"],
-                "data_checkin": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                "geo_checkin": f"{lat}, {lon}"
+                "checkin_hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "checkin_geo": f"{lat}, {lon}"
             }
-            st.success(f"Check-in efetuado em: {cliente_escolhido}")
             st.rerun()
 
-    # Fluxo 2: Durante a Visita e Finalização (Check-out)
+    # 2. CHECK-OUT E FORMULÁRIO DE VISITA
     else:
         dados = st.session_state["dados_visita"]
-        
         st.markdown(f"""
             <div class="status-box">
-                <b>Cliente em Atendimento:</b> {dados['cliente']}<br>
-                <b>Início da Visita:</b> {dados['data_checkin']}<br>
-                <b>Coordenadas Entrada:</b> {dados['geo_checkin']}
+                <b>Cliente:</b> {dados['cliente']}<br>
+                <b>Entrada:</b> {dados['checkin_hora']}<br>
+                <b>GPS Entrada:</b> {dados['checkin_geo']}
             </div>
         """, unsafe_allow_html=True)
 
-        st.subheader("1. Evidências do Serviço")
+        st.subheader("Fotos de Comprovação")
         col1, col2 = st.columns(2)
         with col1:
-            st.caption("Foto da Máquina Abastecida:")
-            foto_abastecimento = st.camera_input("Foto Abastecimento", key="foto_abast")
+            st.caption("1. Máquina Abastecida:")
+            foto_abastecida = st.camera_input("Foto Abastecimento", key="foto1")
         with col2:
-            st.caption("Foto da Máquina Limpa:")
-            foto_limpeza = st.camera_input("Foto Limpeza", key="foto_limp")
+            st.caption("2. Máquina Limpa:")
+            foto_limpa = st.camera_input("Foto Limpeza", key="foto2")
 
-        st.subheader("2. Confirmação do Responsável")
-        nome_responsavel = st.text_input("Nome do responsável no local:")
+        st.subheader("Validação do Responsável")
+        responsavel = st.text_input("Nome de quem acompanhou no cliente:")
         
-        st.caption("Assinatura do cliente na tela:")
+        st.caption("Assine no quadro abaixo:")
         canvas_result = st_canvas(
             fill_color="rgba(255, 255, 255, 0)",
             stroke_width=2,
             stroke_color="#0D6EFD",
             background_color="#FFFFFF",
-            height=140,
-            width=360,
+            height=130,
+            width=340,
             drawing_mode="freedraw",
-            key="canvas_assinatura"
+            key="assinatura"
         )
 
-        st.subheader("3. Finalizar Atendimento")
         loc_checkout = get_geolocation()
 
-        if st.button("🏁 Realizar Check-out e Salvar"):
-            # Validações obrigatórias
-            if not foto_abastecimento or not foto_limpeza:
-                st.error("Por favor, tire ambas as fotos (abastecimento e limpeza) antes de encerrar.")
-            elif not nome_responsavel.strip():
-                st.error("Informe o nome do responsável que acompanhou o serviço.")
-            elif canvas_result.image_data is None:
-                st.error("Colha a assinatura do cliente no campo acima.")
+        if st.button("🏁 Concluir Visita (Check-out)"):
+            if not foto_abastecida or not foto_limpa:
+                st.error("É obrigatório tirar as duas fotos (abastecimento e limpeza).")
+            elif not responsavel.strip():
+                st.error("Informe o nome do responsável no local.")
             else:
                 coords = loc_checkout["coords"] if loc_checkout else None
-                lat_out = coords["latitude"] if coords else "Não identificada"
-                lon_out = coords["longitude"] if coords else "Não identificada"
+                dados["checkout_hora"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                dados["checkout_geo"] = f"{coords['latitude']}, {coords['longitude']}" if coords else "Sem GPS"
+                dados["responsavel"] = responsavel
 
-                dados["data_checkout"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                dados["geo_checkout"] = f"{lat_out}, {lon_out}"
-                dados["responsavel"] = nome_responsavel
-                
-                # Exemplo de salvamento de log / exportação
-                registro_final = pd.DataFrame([dados])
-                registro_final.to_csv("historico_visitas.csv", mode="a", header=not os.path.exists("historico_visitas.csv"), index=False)
+                # Salva o histórico localmente
+                df_final = pd.DataFrame([dados])
+                df_final.to_csv("visitas_realizadas.csv", mode="a", header=not os.path.exists("visitas_realizadas.csv"), index=False)
 
-                st.success("✅ Atendimento concluído com sucesso e dados arquivados!")
+                st.success("✅ Atendimento concluído com sucesso!")
                 st.balloons()
-                
-                # Reset para próxima visita
+
                 st.session_state["visita_ativa"] = False
                 st.session_state["dados_visita"] = {}
-                
-                if st.button("Iniciar Próxima Visita"):
+                if st.button("Próximo Atendimento"):
                     st.rerun()
 
 if __name__ == "__main__":
