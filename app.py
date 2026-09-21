@@ -68,8 +68,8 @@ def carregar_dados_planilha():
     internas e quebras de linha que causam erro de tokenização.
     """
     try:
-        url_clientes = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Clientes"
-        url_usuarios = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Usuarios"
+        url_clientes = f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?gid=0#gid=0"
+        url_usuarios = f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?gid=1642053143#gid=1642053143"
         
         # Parâmetros que eliminam o erro 'esperados X campos, vi Y'
         params_leitura = {
