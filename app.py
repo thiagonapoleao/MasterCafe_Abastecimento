@@ -4,6 +4,7 @@ from datetime import datetime
 import os
 import urllib.parse
 import unicodedata
+import requests
 from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
 
@@ -69,7 +70,10 @@ st.markdown("""
 # 2. CONEXÃO COM A PLANILHA MASTER CAFÉ
 # -------------------------------------------------------------
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
-GID_USUARIOS = "1642053143"  # GID específico da aba de logins
+GID_USUARIOS = "1642053143"
+
+# URL do Webhook do Google Apps Script para salvar na aba "Visitas"
+WEBHOOK_URL = "COLE_AQUI_A_URL_DO_APP_DA_WEB_DO_APPS_SCRIPT"
 
 def normalizar_texto(texto):
     """Remove acentuações, caracteres especiais e coloca em minúsculo."""
@@ -93,7 +97,6 @@ def carregar_usuarios():
         )
         df.columns = [normalizar_texto(c) for c in df.columns]
 
-        # Garante a existência das colunas
         if "usuario" in df.columns and "senha" in df.columns:
             df["usuario"] = df["usuario"].fillna("").astype(str).str.strip().str.lower()
             df["senha"] = df["senha"].fillna("").astype(str).str.strip()
@@ -180,6 +183,19 @@ def carregar_base_equipamentos():
         st.error(f"Erro ao carregar dados da planilha Google: {e}")
         return pd.DataFrame()
 
+def salvar_visita_na_planilha(dados):
+    """
+    Envia a visita diretamente para a aba 'Visitas' da planilha via Google Apps Script Webhook.
+    """
+    if WEBHOOK_URL.startswith("http"):
+        try:
+            resposta = requests.post(WEBHOOK_URL, json=dados, timeout=10)
+            if resposta.status_code == 200:
+                return True
+        except Exception as e:
+            st.warning(f"Não foi possível sincronizar na planilha Google online: {e}")
+    return False
+
 # -------------------------------------------------------------
 # 3. TELA DE LOGIN
 # -------------------------------------------------------------
@@ -217,12 +233,10 @@ def tela_login(df_usuarios):
 def main():
     df_usuarios = carregar_usuarios()
 
-    # Controle de Autenticação
     if not st.session_state.get("autenticado", False):
         tela_login(df_usuarios)
         return
 
-    # Barra lateral de perfil
     with st.sidebar:
         st.write(f"👤 **Abastecedor(a):**\n### {st.session_state.get('nome_abastecedor')}")
         if st.button("🚪 Sair do Sistema"):
@@ -369,7 +383,10 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # Salva localmente em histórico CSV
+                # Envio para a aba 'Visitas' da planilha Google
+                sucesso_planilha = salvar_visita_na_planilha(dados)
+
+                # Gravação de backup local
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
@@ -379,7 +396,10 @@ def main():
                     index=False
                 )
 
-                st.success("✅ Atendimento concluído e registrado com sucesso!")
+                if sucesso_planilha:
+                    st.success("✅ Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
+                else:
+                    st.success("✅ Atendimento registrado localmente com sucesso!")
                 st.balloons()
 
                 st.session_state["visita_ativa"] = False
