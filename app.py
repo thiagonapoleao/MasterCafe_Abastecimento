@@ -87,10 +87,7 @@ def carregar_usuarios():
     """
     Carrega os dados de login da aba de usuários usando o GID 1642053143.
     """
-    urls =
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143",
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&gid=1642053143",
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&sheet=Usuarios"
+    url ="https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143"
     try:
         df = pd.read_csv(
             url,
