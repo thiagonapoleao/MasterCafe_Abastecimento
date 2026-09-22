@@ -1,19 +1,16 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import urllib.parse
-import unicodedata
+from datetime import datetime, date, timedelta
 import requests
-import os
+import json
+import plotly.express as px
 
 # -------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA PÁGINA E ESTILO VISUAL (DARK MODE / CORPORATIVO)
+# 1. CONFIGURAÇÃO DA PÁGINA E ESTILO VISUAL (DARK MODE)
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="Master Café - Dashboard de Visitas",
-    page_icon="📊",
+    page_icon="☕",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -24,457 +21,381 @@ st.markdown("""
             background-color: #0F172A;
             color: #F8FAFC;
         }
-        .metric-card {
-            background: linear-gradient(135deg, #1E293B, #0F172A);
-            border: 1px solid #334155;
+        .main-header {
+            text-align: center;
+            padding: 16px;
             border-radius: 10px;
-            padding: 16px 20px;
-            text-align: left;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.25);
-            margin-bottom: 10px;
+            background: linear-gradient(135deg, #1E3A8A, #0D6EFD);
+            color: white;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
         }
-        .metric-title {
-            color: #94A3B8;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 4px;
-        }
-        .metric-value {
-            color: #38BDF8;
-            font-size: 1.8rem;
-            font-weight: 700;
-        }
-        .metric-sub {
-            color: #64748B;
-            font-size: 0.75rem;
-            margin-top: 4px;
-        }
-        .insight-card {
+        .metric-card {
             background-color: #1E293B;
-            border-left: 4px solid #38BDF8;
-            border-radius: 4px 8px 8px 4px;
-            padding: 14px 18px;
-            margin-bottom: 20px;
-            color: #E2E8F0;
-        }
-        .delete-box {
-            background-color: #1E293B;
-            border: 1px solid #EF4444;
-            border-radius: 8px;
+            border: 1px solid #334155;
             padding: 18px;
-            margin-top: 15px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        .block-header {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: #F8FAFC;
-            margin-top: 20px;
-            margin-bottom: 12px;
-            border-bottom: 1px solid #334155;
-            padding-bottom: 6px;
+        .metric-card h3 {
+            margin: 0;
+            font-size: 1.8rem;
+            color: #38BDF8;
+        }
+        .metric-card p {
+            margin: 5px 0 0 0;
+            color: #94A3B8;
+            font-weight: 500;
+        }
+        .status-badge {
+            background-color: #1E293B;
+            border-left: 4px solid #0D6EFD;
+            padding: 10px 14px;
+            border-radius: 4px 8px 8px 4px;
+            margin: 8px 0;
+            color: #E2E8F0;
         }
     </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. CONEXÃO COM A PLANILHA GOOGLE (ABA "Visitas")
+# 2. CONSTANTES E INTEGRAÇÃO GOOGLE SHEETS / DRIVE
 # -------------------------------------------------------------
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
+WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
-# URL DO SEU APPS SCRIPT
-WEBHOOK_URL = "COLE_AQUI_A_URL_DO_APP_DA_WEB_DO_APPS_SCRIPT"
-
-def normalizar_coluna(col):
-    if not isinstance(col, str):
-        col = str(col)
-    texto = unicodedata.normalize('NFKD', col).encode('ASCII', 'ignore').decode('ASCII')
-    return texto.strip().lower()
-
+# -------------------------------------------------------------
+# 3. CARREGAMENTO DOS DADOS DE VISITAS
+# -------------------------------------------------------------
 @st.cache_data(ttl=30)
 def carregar_dados_visitas():
-    nome_aba = urllib.parse.quote("Visitas")
-    url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_aba}"
-
-    try:
-        df = pd.read_csv(
-            url,
-            engine="python",
-            on_bad_lines="skip",
-            dtype=str
-        )
-        
-        mapa_colunas = {}
-        for c in df.columns:
-            norm = normalizar_coluna(c)
-            if "checkin" in norm and "data" in norm:
-                mapa_colunas[c] = "data_checkin"
-            elif "checkout" in norm and "data" in norm:
-                mapa_colunas[c] = "data_checkout"
-            elif "abastecedor" in norm:
-                mapa_colunas[c] = "abastecedor"
-            elif "equipamento" in norm:
-                mapa_colunas[c] = "equipamento"
-            elif "cliente" in norm:
-                mapa_colunas[c] = "cliente"
-            elif "produto" in norm:
-                mapa_colunas[c] = "produto"
-            elif "endereco" in norm:
-                mapa_colunas[c] = "endereco"
-            elif "checkin" in norm and "gps" in norm:
-                mapa_colunas[c] = "geo_checkin"
-            elif "checkout" in norm and "gps" in norm:
-                mapa_colunas[c] = "geo_checkout"
-            elif "responsavel" in norm:
-                mapa_colunas[c] = "responsavel"
-
-        df = df.rename(columns=mapa_colunas)
-
-    except Exception:
-        df = pd.DataFrame()
-
-    if df.empty or "data_checkin" not in df.columns or len(df) == 0:
-        base_exemplo = [
-            {"data_checkin": "21/09/2026 08:30:00", "data_checkout": "21/09/2026 09:05:00", "abastecedor": "Thiago Napoleão", "equipamento": "02020383", "cliente": "JBT FOOD TECH", "produto": "KREA ES4S-R/BR", "endereco": "AV CAMILO DINUCCI, 4605", "geo_checkin": "-21.7946, -48.1766", "geo_checkout": "-21.7947, -48.1765", "responsavel": "Marcos"},
-            {"data_checkin": "21/09/2026 09:40:00", "data_checkout": "21/09/2026 10:10:00", "abastecedor": "Thiago Napoleão", "equipamento": "102885", "cliente": "CAFETERIA KAFFE", "produto": "FIORENZATO", "endereco": "AV PRES KENNEDY, 1500", "geo_checkin": "-21.1767, -47.8208", "geo_checkout": "-21.1768, -47.8207", "responsavel": "Ana Paula"},
-            {"data_checkin": "21/09/2026 10:45:00", "data_checkout": "21/09/2026 11:35:00", "abastecedor": "Mariana Operações", "equipamento": "1712942", "cliente": "GELATO BORELLI", "produto": "FAEMA E98", "endereco": "AV JUSCELINO KUBITSCHEK, 5000", "geo_checkin": "-20.8113, -49.3758", "geo_checkout": "-20.8115, -49.3757", "responsavel": "Lucas"},
-            {"data_checkin": "20/09/2026 14:15:00", "data_checkout": "20/09/2026 14:40:00", "abastecedor": "Carla Silva", "equipamento": "1727812", "cliente": "NAPOLEAO CAFE", "produto": "MOINHO FAEMA", "endereco": "RUA NAPOLEAO SELMI-DEI, 756", "geo_checkin": "-21.7821, -48.1812", "geo_checkout": "-21.7822, -48.1811", "responsavel": "Cláudia"}
-        ]
-        df = pd.DataFrame(base_exemplo)
-
-    # Tratamento de datas e durações
-    df["dt_checkin"] = pd.to_datetime(df["data_checkin"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
-    df["dt_checkout"] = pd.to_datetime(df["data_checkout"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    """Carrega os dados da aba Visitas diretamente da planilha Google ou do backup local."""
+    urls = [
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas",
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&sheet=Visitas"
+    ]
     
-    df["duracao_minutos"] = (df["dt_checkout"] - df["dt_checkin"]).dt.total_seconds() / 60.0
-    df["duracao_minutos"] = df["duracao_minutos"].apply(lambda x: round(max(x, 1.0), 1) if pd.notnull(x) else 0.0)
+    df = None
+    for url in urls:
+        try:
+            df_temp = pd.read_csv(url, engine="python", on_bad_lines="skip", dtype=str)
+            if not df_temp.empty and len(df_temp.columns) >= 4:
+                df = df_temp
+                break
+        except Exception:
+            continue
 
-    df["data_dia"] = df["dt_checkin"].dt.strftime("%d/%m/%Y")
-    df["mes_ano"] = df["dt_checkin"].dt.strftime("%m/%Y")
-    df["hora_checkin"] = df["dt_checkin"].dt.strftime("%H:%M:%S")
-    df["hora_checkout"] = df["dt_checkout"].dt.strftime("%H:%M:%S")
+    # Fallback para o arquivo local se a planilha online não responder
+    if df is None or df.empty:
+        if os.path.exists("visitas_realizadas.csv"):
+            try:
+                df = pd.read_csv("visitas_realizadas.csv", dtype=str)
+            except Exception:
+                df = pd.DataFrame()
+        else:
+            df = pd.DataFrame()
 
+    if df.empty:
+        return pd.DataFrame()
+
+    # Padroniza nomes de colunas
+    col_map = {}
+    for col in df.columns:
+        c_clean = col.strip().lower()
+        if "data checkin" in c_clean or "checkin" in c_clean and "data" in c_clean:
+            col_map[col] = "Data Checkin"
+        elif "data checkout" in c_clean or "checkout" in c_clean and "data" in c_clean:
+            col_map[col] = "Data Checkout"
+        elif "abastecedor" in c_clean:
+            col_map[col] = "Abastecedor"
+        elif "equipamento" in c_clean:
+            col_map[col] = "Equipamento"
+        elif "cliente" in c_clean:
+            col_map[col] = "Cliente"
+        elif "produto" in c_clean:
+            col_map[col] = "Produto"
+        elif "endereço" in c_clean or "endereco" in c_clean:
+            col_map[col] = "Endereço"
+        elif "gps checkin" in c_clean:
+            col_map[col] = "GPS Checkin"
+        elif "gps checkout" in c_clean:
+            col_map[col] = "GPS Checkout"
+        elif "responsável" in c_clean or "responsavel" in c_clean:
+            col_map[col] = "Responsável"
+        elif "foto abastecida" in c_clean:
+            col_map[col] = "Foto Abastecida"
+        elif "foto limpa" in c_clean:
+            col_map[col] = "Foto Limpa"
+        elif "assinatura" in c_clean:
+            col_map[col] = "Assinatura"
+
+    df = df.rename(columns=col_map)
     return df
 
-def excluir_visita(payload):
-    payload["action"] = "delete"
-    sucesso_online = False
-
-    if WEBHOOK_URL.startswith("http"):
-        try:
-            resp = requests.post(WEBHOOK_URL, json=payload, timeout=10)
-            if resp.status_code == 200:
-                sucesso_online = True
-        except Exception as e:
-            st.error(f"Erro ao conectar com Google Sheets para excluir: {e}")
-
-    if os.path.exists("visitas_realizadas.csv"):
-        try:
-            df_local = pd.read_csv("visitas_realizadas.csv", dtype=str)
-            mask = ~(
-                (df_local["data_checkin"] == payload["data_checkin"]) &
-                (df_local["abastecedor"] == payload["abastecedor"]) &
-                (df_local["equipamento"] == payload["equipamento"])
-            )
-            df_local[mask].to_csv("visitas_realizadas.csv", index=False)
-        except Exception:
-            pass
-
-    return sucesso_online
+def excluir_registro_planilha(data_checkin, abastecedor, equipamento):
+    """Envia requisição para exclusão de registro via Webhook Apps Script."""
+    try:
+        payload = {
+            "action": "delete",
+            "data_checkin": str(data_checkin).strip(),
+            "abastecedor": str(abastecedor).strip(),
+            "equipamento": str(equipamento).strip()
+        }
+        headers = {"Content-Type": "text/plain;charset=utf-8"}
+        res = requests.post(WEBHOOK_URL, data=json.dumps(payload), headers=headers, timeout=20)
+        return res.status_code == 200
+    except Exception:
+        return False
 
 # -------------------------------------------------------------
-# 3. INTERFACE E ABAS DO PAINEL
+# 4. INTERFACE PRINCIPAL DO DASHBOARD
 # -------------------------------------------------------------
-st.title("☕ Master Café — Cockpit de Operações e Visitas")
-st.caption("Acompanhamento gerencial em tempo real de abastecimentos, produtividade e tempos de ciclo.")
+def main():
+    st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Painel de Monitoramento de Visitas e Manutenções</p></div>', unsafe_allow_html=True)
 
-df_raw = carregar_dados_visitas()
+    df_raw = carregar_dados_visitas()
 
-aba_cockpit, aba_exclusao = st.tabs(["📊 Visão Analítica & Indicadores", "🗑️ Gestão e Exclusão de Registros"])
+    if df_raw.empty or "Data Checkin" not in df_raw.columns:
+        st.warning("⚠️ Nenhum registro de visita encontrado na planilha ou no histórico local.")
+        if st.button("🔄 Atualizar Dados"):
+            st.cache_data.clear()
+            st.rerun()
+        return
 
-# -------------------------------------------------------------
-# ABA 1: VISÃO ANALÍTICA
-# -------------------------------------------------------------
-with aba_cockpit:
+    df = df_raw.copy()
+
+    # ---------------------------------------------------------
+    # BARRA LATERAL: FILTROS
+    # ---------------------------------------------------------
     with st.sidebar:
-        st.header("🔍 Filtros de Operação")
-        
-        abastecedores = sorted([x for x in df_raw["abastecedor"].dropna().unique().tolist() if str(x).strip() != ""])
-        abast_selecionados = st.multiselect("Abastecedor(a):", options=abastecedores, default=abastecedores)
+        st.header("🔍 Filtros de Consulta")
 
-        min_date = df_raw["dt_checkin"].min()
-        max_date = df_raw["dt_checkin"].max()
-        if pd.isna(min_date):
-            min_date = datetime.now() - timedelta(days=30)
-        if pd.isna(max_date):
-            max_date = datetime.now()
-
-        intervalo_data = st.date_input("Período de Análise:", value=(min_date.date(), max_date.date()))
-
-        clientes_lista = sorted([x for x in df_raw["cliente"].dropna().unique().tolist() if str(x).strip() != ""])
-        clientes_selecionados = st.multiselect("Cliente / Ponto:", options=clientes_lista, default=[])
-
-        st.markdown("---")
-        if st.button("🔄 Atualizar Indicadores"):
+        if st.button("🔄 Atualizar Painel"):
             st.cache_data.clear()
             st.rerun()
 
-    # Aplicação dos Filtros
-    df = df_raw.copy()
-    if abast_selecionados:
-        df = df[df["abastecedor"].isin(abast_selecionados)]
-    if isinstance(intervalo_data, tuple) and len(intervalo_data) == 2:
-        d_inicio, d_fim = intervalo_data
-        df = df[(df["dt_checkin"].dt.date >= d_inicio) & (df["dt_checkin"].dt.date <= d_fim)]
-    if clientes_selecionados:
-        df = df[df["cliente"].isin(clientes_selecionados)]
+        st.markdown("---")
 
-    # Cards de KPIs
+        # Configuração padrão do intervalo de datas (últimos 30 dias até hoje)
+        hoje = date.today()
+        inicio_padrao = hoje - timedelta(days=30)
+        
+        filtro_data = st.date_input(
+            "Período das Visitas:",
+            value=(inicio_padrao, hoje),
+            format="DD/MM/YYYY"
+        )
+
+        # ---------------------------------------------------------
+        # FILTRO DE DATAS BLINDADO CONTRA ERRO DE COMPARAÇÃO
+        # ---------------------------------------------------------
+        df["dt_checkin"] = pd.to_datetime(df["Data Checkin"], errors="coerce", dayfirst=True, format="mixed")
+
+        d_inicio, d_fim = None, None
+        if isinstance(filtro_data, (list, tuple)):
+            if len(filtro_data) == 2:
+                d_inicio, d_fim = filtro_data[0], filtro_data[1]
+            elif len(filtro_data) == 1:
+                d_inicio = d_fim = filtro_data[0]
+        elif filtro_data:
+            d_inicio = d_fim = filtro_data
+
+        if d_inicio and d_fim:
+            t_inicio = pd.Timestamp(d_inicio).replace(hour=0, minute=0, second=0, microsecond=0)
+            t_fim = pd.Timestamp(d_fim).replace(hour=23, minute=59, second=59, microsecond=999999)
+            
+            df = df[
+                df["dt_checkin"].notna() & 
+                (df["dt_checkin"] >= t_inicio) & 
+                (df["dt_checkin"] <= t_fim)
+            ]
+
+        # Filtro de Abastecedor / Técnico
+        lista_abast = ["Todos"] + sorted(df["Abastecedor"].dropna().unique().tolist()) if "Abastecedor" in df.columns else ["Todos"]
+        sel_abast = st.selectbox("Técnico / Abastecedor:", lista_abast)
+        if sel_abast != "Todos":
+            df = df[df["Abastecedor"] == sel_abast]
+
+        # Filtro de Equipamento
+        if "Equipamento" in df.columns:
+            lista_equip = ["Todos"] + sorted(df["Equipamento"].dropna().unique().tolist())
+            sel_equip = st.selectbox("Número do Equipamento:", lista_equip)
+            if sel_equip != "Todos":
+                df = df[df["Equipamento"] == sel_equip]
+
+        st.caption(f"Registros exibidos: **{len(df)}**")
+
+    # ---------------------------------------------------------
+    # 5. CARTOES DE MÉTRICAS (KPIs)
+    # ---------------------------------------------------------
     total_visitas = len(df)
-    total_clientes = df["cliente"].nunique() if total_visitas > 0 else 0
-    total_maquinas = df["equipamento"].nunique() if total_visitas > 0 else 0
-    tempo_medio_geral = round(df["duracao_minutos"].mean(), 1) if total_visitas > 0 else 0.0
+    maquinas_atendidas = df["Equipamento"].nunique() if "Equipamento" in df.columns else 0
+    clientes_atendidos = df["Cliente"].nunique() if "Cliente" in df.columns else 0
+    tecnicos_ativos = df["Abastecedor"].nunique() if "Abastecedor" in df.columns else 0
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f'<div class="metric-card"><div class="metric-title">Total de Visitas</div><div class="metric-value">{total_visitas}</div><div class="metric-sub">Atendimentos concluídos</div></div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown(f'<div class="metric-card"><div class="metric-title">Clientes Atendidos</div><div class="metric-value">{total_clientes}</div><div class="metric-sub">Empresas e pontos distintos</div></div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown(f'<div class="metric-card"><div class="metric-title">Máquinas Abastecidas</div><div class="metric-value">{total_maquinas}</div><div class="metric-sub">Equipamentos únicos</div></div>', unsafe_allow_html=True)
-    with col4:
-        st.markdown(f'<div class="metric-card"><div class="metric-title">Tempo Médio Geral</div><div class="metric-value">{tempo_medio_geral} min</div><div class="metric-sub">Média por máquina em campo</div></div>', unsafe_allow_html=True)
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        st.markdown(f'<div class="metric-card"><h3>{total_visitas}</h3><p>Total de Visitas</p></div>', unsafe_allow_html=True)
+    with kpi2:
+        st.markdown(f'<div class="metric-card"><h3>{maquinas_atendidas}</h3><p>Máquinas Atendidas</p></div>', unsafe_allow_html=True)
+    with kpi3:
+        st.markdown(f'<div class="metric-card"><h3>{clientes_atendidos}</h3><p>Clientes Distintos</p></div>', unsafe_allow_html=True)
+    with kpi4:
+        st.markdown(f'<div class="metric-card"><h3>{tecnicos_ativos}</h3><p>Técnicos em Ação</p></div>', unsafe_allow_html=True)
 
-    # Insights Automáticos
-    if total_visitas > 0:
-        maior_abast = df["abastecedor"].value_counts().index[0]
-        qtd_maior = df["abastecedor"].value_counts().iloc[0]
-        cliente_mais_visitado = df["cliente"].value_counts().index[0]
-        tempo_max = df["duracao_minutos"].max()
-        cli_tempo_max = df.loc[df["duracao_minutos"].idxmax()]["cliente"]
-        
-        st.markdown(f"""
-            <div class="insight-card">
-                <b>💡 Destaques da Operação Master Café:</b><br>
-                • <b>Produtividade:</b> O(A) colaborador(a) <b>{maior_abast}</b> lidera com <b>{qtd_maior}</b> visitas realizadas.<br>
-                • <b>Frequência:</b> O cliente com maior volume de atendimentos foi <b>{cliente_mais_visitado}</b>.<br>
-                • <b>Atenção de Eficiência:</b> O atendimento mais longo demorou <b>{tempo_max} minutos</b> em <b>{cli_tempo_max}</b>.
-            </div>
-        """, unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # Gráficos Visuais
-    st.markdown('<div class="block-header">📊 Indicadores de Eficiência e Tempo de Ciclo</div>', unsafe_allow_html=True)
-    c_graf1, c_graf2 = st.columns(2)
+    # ---------------------------------------------------------
+    # 6. GRÁFICOS VISUAIS
+    # ---------------------------------------------------------
+    if not df.empty:
+        col_g1, col_g2 = st.columns(2)
 
-    with c_graf1:
-        df_tempo_cliente = df.groupby("cliente")["duracao_minutos"].mean().reset_index().sort_values("duracao_minutos", ascending=True)
-        df_tempo_cliente["duracao_minutos"] = df_tempo_cliente["duracao_minutos"].round(1)
-        fig_cli = px.bar(df_tempo_cliente, x="duracao_minutos", y="cliente", orientation="h", title="Tempo Médio por Cliente (minutos)", text="duracao_minutos", color="duracao_minutos", color_continuous_scale=["#0D6EFD", "#38BDF8"])
-        fig_cli.update_layout(template="plotly_dark", plot_bgcolor="#1E293B", paper_bgcolor="#1E293B", xaxis_title="Minutos", yaxis_title="", coloraxis_showscale=False, height=360)
-        st.plotly_chart(fig_cli, use_container_width=True)
-
-    with c_graf2:
-        df_tempo_abast = df.groupby("abastecedor")["duracao_minutos"].mean().reset_index().sort_values("duracao_minutos", ascending=False)
-        df_tempo_abast["duracao_minutos"] = df_tempo_abast["duracao_minutos"].round(1)
-        fig_abast = px.bar(df_tempo_abast, x="abastecedor", y="duracao_minutos", title="Tempo Médio por Abastecedor (minutos)", text="duracao_minutos", color="duracao_minutos", color_continuous_scale=["#1E3A8A", "#0D6EFD"])
-        fig_abast.update_layout(template="plotly_dark", plot_bgcolor="#1E293B", paper_bgcolor="#1E293B", xaxis_title="", yaxis_title="Minutos", coloraxis_showscale=False, height=360)
-        st.plotly_chart(fig_abast, use_container_width=True)
-
-    c_graf3, c_graf4 = st.columns(2)
-    with c_graf3:
-        df_prod = df["produto"].value_counts().reset_index()
-        df_prod.columns = ["produto", "total"]
-        fig_prod = px.pie(df_prod, names="produto", values="total", title="Distribuição por Modelo de Máquina", hole=0.45, color_discrete_sequence=["#0D6EFD", "#38BDF8", "#0284C7", "#60A5FA"])
-        fig_prod.update_layout(template="plotly_dark", plot_bgcolor="#1E293B", paper_bgcolor="#1E293B", height=350)
-        st.plotly_chart(fig_prod, use_container_width=True)
-
-    with c_graf4:
-        df_timeline = df.groupby("data_dia").size().reset_index(name="visitas")
-        fig_line = px.line(df_timeline, x="data_dia", y="visitas", markers=True, title="Volume de Visitas por Dia", line_shape="spline")
-        fig_line.update_traces(line_color="#38BDF8", marker=dict(size=8, color="#0D6EFD"))
-        fig_line.update_layout(template="plotly_dark", plot_bgcolor="#1E293B", paper_bgcolor="#1E293B", xaxis_title="Data", yaxis_title="Total de Visitas", height=350)
-        st.plotly_chart(fig_line, use_container_width=True)
-
-    # -------------------------------------------------------------
-    # 4. PRODUÇÃO CONSOLIDADA E DETALHAMENTO POR MÁQUINA
-    # -------------------------------------------------------------
-    st.markdown('<div class="block-header">📈 Produção Consolidada por Abastecedor e Detalhado por Máquina</div>', unsafe_allow_html=True)
-    tab_mes, tab_dia = st.tabs(["📅 Consolidado por Mês", "🗓️ Consolidado por Dia"])
-    
-    # Colunas padrão para o detalhamento por máquina
-    cols_detalhe = [
-        "abastecedor", "equipamento", "produto", "cliente", "endereco",
-        "data_dia", "hora_checkin", "hora_checkout", "duracao_minutos",
-        "geo_checkin", "geo_checkout", "responsavel"
-    ]
-    cols_existentes = [c for c in cols_detalhe if c in df.columns]
-
-    mapa_renomear = {
-        "abastecedor": "Abastecedor",
-        "equipamento": "Nº Máquina",
-        "produto": "Modelo / Produto",
-        "cliente": "Cliente",
-        "endereco": "Endereço",
-        "data_dia": "Data",
-        "hora_checkin": "Check-in (Hora)",
-        "hora_checkout": "Check-out (Hora)",
-        "duracao_minutos": "Duração (min)",
-        "geo_checkin": "GPS Check-in",
-        "geo_checkout": "GPS Check-out",
-        "responsavel": "Responsável (Assinatura)"
-    }
-
-    with tab_mes:
-        st.subheader("1. Resumo Mensal por Abastecedor")
-        df_mes = df.groupby(["mes_ano", "abastecedor"]).agg(
-            total_visitas=("equipamento", "count"),
-            clientes_unicos=("cliente", "nunique"),
-            maquinas_unicas=("equipamento", "nunique"),
-            tempo_medio=("duracao_minutos", "mean")
-        ).reset_index()
-        df_mes["tempo_medio"] = df_mes["tempo_medio"].round(1)
-        st.dataframe(
-            df_mes.rename(columns={
-                "mes_ano": "Mês/Ano",
-                "abastecedor": "Abastecedor",
-                "total_visitas": "Total Atendimentos",
-                "clientes_unicos": "Clientes Distintos",
-                "maquinas_unicas": "Máquinas Distintas",
-                "tempo_medio": "Tempo Médio (min)"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.subheader("2. Detalhado Mensal por Máquina (Horários e Geolocalização)")
-        
-        # Filtro opcional de mês e abastecedor para focar a consulta
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            meses_disp = sorted(df["mes_ano"].dropna().unique().tolist(), reverse=True)
-            mes_sel = st.selectbox("Selecione o Mês/Ano:", options=["Todos"] + meses_disp, key="sel_mes_det")
-        with col_m2:
-            abast_mes_disp = sorted(df["abastecedor"].dropna().unique().tolist())
-            abast_mes_sel = st.selectbox("Selecione o Abastecedor:", options=["Todos"] + abast_mes_disp, key="sel_abast_mes_det")
-
-        df_det_mes = df.copy()
-        if mes_sel != "Todos":
-            df_det_mes = df_det_mes[df_det_mes["mes_ano"] == mes_sel]
-        if abast_mes_sel != "Todos":
-            df_det_mes = df_det_mes[df_det_mes["abastecedor"] == abast_mes_sel]
-
-        df_det_mes_view = df_det_mes[cols_existentes].rename(columns=mapa_renomear)
-        st.dataframe(df_det_mes_view, use_container_width=True, hide_index=True)
-
-    with tab_dia:
-        st.subheader("1. Resumo Diário por Abastecedor")
-        df_dia = df.groupby(["data_dia", "abastecedor"]).agg(
-            total_visitas=("equipamento", "count"),
-            clientes_unicos=("cliente", "nunique"),
-            maquinas_unicas=("equipamento", "nunique"),
-            tempo_medio=("duracao_minutos", "mean")
-        ).reset_index()
-        df_dia["tempo_medio"] = df_dia["tempo_medio"].round(1)
-        st.dataframe(
-            df_dia.rename(columns={
-                "data_dia": "Data",
-                "abastecedor": "Abastecedor",
-                "total_visitas": "Total Atendimentos",
-                "clientes_unicos": "Clientes Distintos",
-                "maquinas_unicas": "Máquinas Distintas",
-                "tempo_medio": "Tempo Médio (min)"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.subheader("2. Detalhado Diário por Máquina (Horários e Geolocalização)")
-        
-        # Filtro opcional de dia e abastecedor para focar a consulta
-        col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            dias_disp = sorted(df["data_dia"].dropna().unique().tolist(), reverse=True)
-            dia_sel = st.selectbox("Selecione a Data (Dia):", options=["Todas"] + dias_disp, key="sel_dia_det")
-        with col_d2:
-            abast_dia_disp = sorted(df["abastecedor"].dropna().unique().tolist())
-            abast_dia_sel = st.selectbox("Selecione o Abastecedor:", options=["Todos"] + abast_dia_disp, key="sel_abast_dia_det")
-
-        df_det_dia = df.copy()
-        if dia_sel != "Todas":
-            df_det_dia = df_det_dia[df_det_dia["data_dia"] == dia_sel]
-        if abast_dia_sel != "Todos":
-            df_det_dia = df_det_dia[df_det_dia["abastecedor"] == abast_dia_sel]
-
-        df_det_dia_view = df_det_dia[cols_existentes].rename(columns=mapa_renomear)
-        st.dataframe(df_det_dia_view, use_container_width=True, hide_index=True)
-
-# -------------------------------------------------------------
-# ABA 2: GESTÃO E EXCLUSÃO DE DADOS LANÇADOS
-# -------------------------------------------------------------
-with aba_exclusao:
-    st.subheader("🗑️ Exclusão de Atendimentos Lançados")
-    st.caption("Esta ferramenta permite a exclusão pontual de registros lançados por engano ou duplicados.")
-
-    col_f1, col_f2 = st.columns(2)
-    with col_f1:
-        filtro_abast_del = st.selectbox(
-            "Filtrar por Abastecedor:",
-            options=["Todos"] + sorted(df_raw["abastecedor"].dropna().unique().tolist())
-        )
-    with col_f2:
-        filtro_cli_del = st.selectbox(
-            "Filtrar por Cliente:",
-            options=["Todos"] + sorted(df_raw["cliente"].dropna().unique().tolist())
-        )
-
-    df_del = df_raw.copy()
-    if filtro_abast_del != "Todos":
-        df_del = df_del[df_del["abastecedor"] == filtro_abast_del]
-    if filtro_cli_del != "Todos":
-        df_del = df_del[df_del["cliente"] == filtro_cli_del]
-
-    if df_del.empty:
-        st.info("Nenhum lançamento encontrado com os filtros selecionados.")
-    else:
-        df_del["label_exclusao"] = df_del.apply(
-            lambda r: f"Data: {r['data_checkin']} | {r['abastecedor']} | Cliente: {r['cliente']} | Máq: {r['equipamento']}",
-            axis=1
-        )
-
-        registro_selecionado = st.selectbox(
-            "Selecione o registro que deseja excluir:",
-            options=df_del["label_exclusao"].tolist()
-        )
-
-        linha_sel = df_del[df_del["label_exclusao"] == registro_selecionado].iloc[0]
-
-        st.markdown(f"""
-            <div class="delete-box">
-                <h4 style="color: #EF4444; margin-top:0;">⚠️ Detalhes do Registro Selecionado</h4>
-                <b>Abastecedor:</b> {linha_sel['abastecedor']}<br>
-                <b>Cliente:</b> {linha_sel['cliente']}<br>
-                <b>Equipamento:</b> {linha_sel['produto']} (Nº {linha_sel['equipamento']})<br>
-                <b>Endereço:</b> {linha_sel['endereco']}<br>
-                <b>Check-in:</b> {linha_sel['data_checkin']} | <b>Check-out:</b> {linha_sel['data_checkout']}<br>
-                <b>GPS Entrada:</b> {linha_sel.get('geo_checkin', 'Não detectado')} | <b>GPS Saída:</b> {linha_sel.get('geo_checkout', 'Não detectado')}<br>
-                <b>Responsável no local:</b> {linha_sel['responsavel']}
-            </div>
-        """, unsafe_allow_html=True)
-
-        confirmacao = st.checkbox("Tenho certeza de que desejo remover este atendimento permanentemente.")
-
-        if st.button("🚨 Confirmar e Excluir Registro", type="primary"):
-            if not confirmacao:
-                st.error("Por favor, marque a caixa de confirmação acima para prosseguir.")
+        with col_g1:
+            st.subheader("📊 Atendimentos por Técnico")
+            if "Abastecedor" in df.columns and not df["Abastecedor"].dropna().empty:
+                df_tec = df["Abastecedor"].value_counts().reset_index()
+                df_tec.columns = ["Técnico", "Atendimentos"]
+                fig_tec = px.bar(
+                    df_tec, 
+                    x="Atendimentos", 
+                    y="Técnico", 
+                    orientation="h",
+                    color="Atendimentos",
+                    color_continuous_scale="Blues",
+                    text="Atendimentos"
+                )
+                fig_tec.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#F8FAFC",
+                    yaxis=dict(autorange="reversed")
+                )
+                st.plotly_chart(fig_tec, use_container_width=True)
             else:
-                payload_exclusao = {
-                    "data_checkin": linha_sel["data_checkin"],
-                    "abastecedor": linha_sel["abastecedor"],
-                    "equipamento": linha_sel["equipamento"]
-                }
-                
-                sucesso = excluir_visita(payload_exclusao)
-                
-                st.success("✅ Registro excluído com sucesso da base de dados!")
-                st.cache_data.clear()
-                st.rerun()
+                st.info("Sem dados de técnicos no período.")
+
+        with col_g2:
+            st.subheader("☕ Top 10 Clientes Atendidos")
+            if "Cliente" in df.columns and not df["Cliente"].dropna().empty:
+                df_cli = df["Cliente"].value_counts().head(10).reset_index()
+                df_cli.columns = ["Cliente", "Visitas"]
+                fig_cli = px.bar(
+                    df_cli,
+                    x="Visitas",
+                    y="Cliente",
+                    orientation="h",
+                    color="Visitas",
+                    color_continuous_scale="Teal",
+                    text="Visitas"
+                )
+                fig_cli.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#F8FAFC",
+                    yaxis=dict(autorange="reversed")
+                )
+                st.plotly_chart(fig_cli, use_container_width=True)
+            else:
+                st.info("Sem dados de clientes no período.")
+
+    # ---------------------------------------------------------
+    # 7. TABELA DETALHADA E EVIDÊNCIAS (FOTOS / ASSINATURA)
+    # ---------------------------------------------------------
+    st.subheader("📋 Detalhes dos Atendimentos Realizados")
+
+    colunas_visiveis = [
+        c for c in ["Data Checkin", "Data Checkout", "Abastecedor", "Equipamento", "Cliente", "Produto", "Responsável"]
+        if c in df.columns
+    ]
+
+    st.dataframe(df[colunas_visiveis], use_container_width=True)
+
+    # ---------------------------------------------------------
+    # 8. INSPEÇÃO DE EVIDÊNCIAS DE UMA VISITA ESPECÍFICA
+    # ---------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🔎 Inspecionar Fotos e Assinatura de um Atendimento")
+
+    if not df.empty:
+        opcoes_visitas = []
+        for idx, row in df.iterrows():
+            d_ch = row.get("Data Checkin", "")
+            eq = row.get("Equipamento", "")
+            cli = row.get("Cliente", "")
+            opcoes_visitas.append(f"{idx} - {d_ch} | Eq: {eq} | {cli}")
+
+        sel_idx_str = st.selectbox("Selecione o registro para visualizar as fotos:", opcoes_visitas)
+        idx_selecionado = int(sel_idx_str.split(" - ")[0])
+        registro = df.loc[idx_selecionado]
+
+        col_f1, col_f2, col_f3 = st.columns(3)
+
+        with col_f1:
+            st.caption("📷 **Máquina Abastecida**")
+            url_abast = str(registro.get("Foto Abastecida", "")).strip()
+            if url_abast and url_abast.startswith("http"):
+                st.image(url_abast, use_container_width=True)
+            else:
+                st.info("Sem foto registrada.")
+
+        with col_f2:
+            st.caption("✨ **Máquina Limpa**")
+            url_limpa = str(registro.get("Foto Limpa", "")).strip()
+            if url_limpa and url_limpa.startswith("http"):
+                st.image(url_limpa, use_container_width=True)
+            else:
+                st.info("Sem foto registrada.")
+
+        with col_f3:
+            st.caption("✍️ **Assinatura do Responsável**")
+            url_ass = str(registro.get("Assinatura", "")).strip()
+            if url_ass and url_ass.startswith("http"):
+                st.image(url_ass, use_container_width=True)
+            else:
+                st.info("Sem assinatura registrada.")
+
+        # Opção de exclusão do registro inspecionado
+        with st.expander("🗑️ Excluir este registro da planilha"):
+            st.warning("Esta ação removerá a linha correspondente na aba 'Visitas' da planilha Google.")
+            if st.button("Confirmar Exclusão do Registro", key=f"del_{idx_selecionado}"):
+                sucesso = excluir_registro_planilha(
+                    registro.get("Data Checkin", ""),
+                    registro.get("Abastecedor", ""),
+                    registro.get("Equipamento", "")
+                )
+                if sucesso:
+                    st.success("Registro removido com sucesso!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Não foi possível excluir o registro. Verifique a conexão com o Webhook.")
+
+    # ---------------------------------------------------------
+    # 9. MAPA DE LOCALIZAÇÃO DOS ATENDIMENTOS
+    # ---------------------------------------------------------
+    if "GPS Checkin" in df.columns:
+        st.markdown("---")
+        st.subheader("📍 Mapa dos Locais de Check-in")
+        
+        pontos_gps = []
+        for _, row in df.iterrows():
+            raw_gps = str(row.get("GPS Checkin", "")).strip()
+            if "," in raw_gps and "não" not in raw_gps.lower():
+                try:
+                    parts = raw_gps.split(",")
+                    lat = float(parts[0].strip())
+                    lon = float(parts[1].strip())
+                    pontos_gps.append({"latitude": lat, "longitude": lon})
+                except Exception:
+                    continue
+
+        if pontos_gps:
+            df_mapa = pd.DataFrame(pontos_gps)
+            st.map(df_mapa)
+        else:
+            st.caption("Nenhuma coordenada GPS válida registrada nos atendimentos filtrados.")
+
+if __name__ == "__main__":
+    main()
