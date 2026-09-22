@@ -7,6 +7,7 @@ import unicodedata
 import requests
 from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
+import streamlit.components.v1 as components
 
 # -------------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA E DESIGN (DARK MODE / CORPORATIVO)
@@ -65,6 +66,49 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
+
+def animacao_graos_cafe():
+    """Gera uma chuva de grãos de café e xícaras na tela ao concluir o atendimento."""
+    animacao_html = """
+    <div id="coffee-rain-container"></div>
+    <style>
+        .coffee-bean {
+            position: fixed;
+            top: -50px;
+            font-size: 28px;
+            user-select: none;
+            pointer-events: none;
+            z-index: 999999;
+            animation: fall 3.5s linear forwards;
+        }
+        @keyframes fall {
+            0% {
+                transform: translateY(0vh) rotate(0deg);
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(105vh) rotate(720deg);
+                opacity: 0;
+            }
+        }
+    </style>
+    <script>
+        const container = document.getElementById("coffee-rain-container");
+        const icons = ["🫘", "☕", "🫘", "☕", "✨"];
+        for (let i = 0; i < 45; i++) {
+            const bean = document.createElement("div");
+            bean.className = "coffee-bean";
+            bean.innerText = icons[Math.floor(Math.random() * icons.length)];
+            bean.style.left = Math.random() * 95 + "vw";
+            bean.style.animationDuration = (2.2 + Math.random() * 2.3) + "s";
+            bean.style.animationDelay = (Math.random() * 1.2) + "s";
+            bean.style.fontSize = (22 + Math.random() * 20) + "px";
+            document.body.appendChild(bean);
+            setTimeout(() => bean.remove(), 6000);
+        }
+    </script>
+    """
+    components.html(animacao_html, height=0)
 
 # -------------------------------------------------------------
 # 2. CONEXÃO COM A PLANILHA MASTER CAFÉ
