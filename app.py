@@ -247,24 +247,48 @@ def main():
 
     df_base = carregar_base_equipamentos()
 
-    # ---------------------------------------------------------
+   # ---------------------------------------------------------
     # ETAPA 1: CHECK-IN
     # ---------------------------------------------------------
     if not st.session_state["visita_ativa"]:
         st.subheader("1. Iniciar Atendimento (Check-in)")
         st.info(f"Operador ativo: **{st.session_state['nome_abastecedor']}**")
 
-        num_equipamento_digitado = st.text_input(
-            "Digite o Número do Equipamento:", 
-            placeholder="Ex: 02020383, 102885, 3113..."
-        ).strip().replace("*", "")
+        if df_base.empty:
+            st.error("⚠️ Não foi possível carregar a lista de equipamentos da folha de cálculo. Verifique a ligação à internet ou as permissões.")
+            return
+
+        # Lista de equipamentos disponíveis para facilitar a seleção ou conferência
+        lista_equipamentos = sorted(df_base["equipamento_limpo"].unique().tolist())
+
+        col_inp1, col_inp2 = st.columns([2, 1])
+        with col_inp1:
+            num_equipamento_digitado = st.text_input(
+                "Digite o Número do Equipamento:", 
+                placeholder="Ex: 02020383, 102885, 3113..."
+            ).strip().replace("*", "")
+        with col_inp2:
+            st.caption("Ou selecione na lista:")
+            eq_selecionado = st.selectbox(
+                "Pesquisa rápida:",
+                options=["Digitar manualmente..."] + lista_equipamentos,
+                label_visibility="collapsed"
+            )
+
+        # Se selecionou pela lista rápida, adota esse valor
+        if eq_selecionado != "Digitar manualmente...":
+            num_equipamento_digitado = eq_selecionado
 
         dados_maquina = None
 
-        if num_equipamento_digitado and not df_base.empty:
+        if num_equipamento_digitado:
+            num_limpo = num_equipamento_digitado.strip().lstrip("0").lower()
+
+            # Busca flexível: igualdade direta, sem zeros à esquerda ou contenção
             resultado = df_base[
                 (df_base["equipamento_limpo"].str.lower() == num_equipamento_digitado.lower()) |
-                (df_base["equipamento_limpo"].str.lstrip("0") == num_equipamento_digitado.lstrip("0"))
+                (df_base["equipamento_limpo"].str.lstrip("0").str.lower() == num_limpo) |
+                (df_base["equipamento_limpo"].str.lower().str.contains(num_equipamento_digitado.lower(), regex=False))
             ]
 
             if not resultado.empty:
@@ -284,16 +308,16 @@ def main():
                     </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning("⚠️ Equipamento não encontrado na base. Confira o número digitado.")
+                st.warning(f"⚠️ Equipamento '{num_equipamento_digitado}' não encontrado na base. Confira se o número digitado está correto.")
 
-        st.caption("ℹ️ A geolocalização do aparelho será registrada automaticamente ao confirmar.")
+        st.caption("ℹ️ A geolocalização do dispositivo será registada automaticamente ao confirmar.")
         loc_checkin = get_geolocation()
 
         if st.button("📍 Confirmar Check-in"):
             if not num_equipamento_digitado:
-                st.error("Digite o número do equipamento.")
+                st.error("Por favor, introduza o número do equipamento.")
             elif not dados_maquina:
-                st.error("Não é possível iniciar: equipamento não localizado na planilha.")
+                st.error("Não é possível iniciar: equipamento não localizado na base de dados.")
             else:
                 coords = loc_checkin["coords"] if loc_checkin else None
                 lat = coords["latitude"] if coords else "GPS não detectado"
@@ -310,7 +334,6 @@ def main():
                     "geo_checkin": f"{lat}, {lon}"
                 }
                 st.rerun()
-
     # ---------------------------------------------------------
     # ETAPA 2: CHECK-OUT E COMPROVAÇÕES
     # ---------------------------------------------------------
