@@ -144,7 +144,7 @@ SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 GID_USUARIOS = "1642053143"
 GID_CLIENTES = "0"
 
-WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
+EBHOOK_URL = "https://script.google.com/macros/s/AKfycbz29P22qs_RBA6halAkFlnwh8phr76zVsq7giCAwXfPIPBafgkhLUiPSLkSbEwBukEJAg/exec"
 
 def normalizar_texto(texto):
     if not isinstance(texto, str):
