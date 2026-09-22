@@ -85,7 +85,7 @@ def normalizar_texto(texto):
 @st.cache_data(ttl=60)
 def carregar_usuarios():
     """Carrega os dados de login da aba de usuários usando o GID 1642053143."""
-    url = f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143"
+    url = "https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143"
     try:
         df = pd.read_csv(
             url,
