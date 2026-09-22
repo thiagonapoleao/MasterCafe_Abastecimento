@@ -71,13 +71,12 @@ st.markdown("""
 # -------------------------------------------------------------
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 GID_USUARIOS = "1642053143"
-GID_CLIENTES = "0"  # GID da aba Clientes
+GID_CLIENTES = "0"
 
-# Cole aqui a URL gerada na Implantação do seu Google Apps Script
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
-
 def normalizar_texto(texto):
+    """Remove acentuações, caracteres especiais e coloca em minúsculo."""
     if not isinstance(texto, str):
         texto = str(texto)
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
@@ -85,11 +84,11 @@ def normalizar_texto(texto):
 
 @st.cache_data(ttl=60)
 def carregar_usuarios():
-    """Carrega usuários cadastrados com fallback tolerante a falhas."""
-    urls = [       
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143",
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&gid=1642053143",
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&sheet=Usuarios"
+    """Carrega os usuários da planilha com tratamento robusto a falhas."""
+    urls = [
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID_USUARIOS}",
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid={GID_USUARIOS}",
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Usuarios"
     ]
     for url in urls:
         try:
@@ -104,37 +103,36 @@ def carregar_usuarios():
         except Exception:
             continue
 
-    # Contingência padrão caso a planilha esteja momentaneamente inacessível
+    # Fallback padrão caso a planilha esteja momentaneamente fora do ar
     return pd.DataFrame([{"usuario": "napoleao", "senha": "123", "nome": "Thiago Napoleão"}])
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def carregar_base_equipamentos():
-    """Carrega os dados da aba 'Clientes' de forma blindada contra KeyError."""
+    """Carrega a aba 'Clientes' mapeando máquinas com ou sem cliente vinculado."""
     urls = [
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0",
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&gid=0",
-        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&sheet=Clientes"
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid={GID_CLIENTES}",
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID_CLIENTES}",
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Clientes"
     ]
     
     df_raw = None
     for url in urls:
         try:
             df_temp = pd.read_csv(url, engine="python", on_bad_lines="skip", dtype=str)
-            if not df_temp.empty and len(df_temp.columns) > 3:
+            if not df_temp.empty and len(df_temp.columns) >= 3:
                 df_raw = df_temp
                 break
         except Exception:
             continue
 
     if df_raw is None or df_raw.empty:
-        st.error("Não foi possível carregar a aba de clientes. Verifique se a planilha está pública como Leitor.")
+        st.error("⚠️ Não foi possível sincronizar com a planilha online. Verifique o compartilhamento (Leitor).")
         return pd.DataFrame()
 
-    # Mapeia colunas normalizadas
     col_map = {normalizar_texto(c): c for c in df_raw.columns}
 
-    # Identifica colunas ou usa fallbacks seguros
     c_equip = col_map.get("equipamento", df_raw.columns[1] if len(df_raw.columns) > 1 else df_raw.columns[0])
+    c_status = col_map.get("status", None)
     c_nome = col_map.get("nome fantasia", col_map.get("cliente", None))
     c_prod = col_map.get("produto", None)
     c_end = col_map.get("endereco", None)
@@ -142,9 +140,22 @@ def carregar_base_equipamentos():
     c_bairro = col_map.get("bairro", None)
     c_cidade = col_map.get("municipio", None)
 
-    # Filtra linhas onde equipamento existe
     df = df_raw[df_raw[c_equip].notna()].copy()
-    df["equipamento_limpo"] = df[c_equip].astype(str).str.replace("*", "", regex=False).str.strip()
+    
+    # Limpa o número do equipamento (remove *, espaços e formatações soltas)
+    df["equipamento_limpo"] = (
+        df[c_equip]
+        .astype(str)
+        .str.replace("*", "", regex=False)
+        .str.strip()
+    )
+
+    def tratar_cliente(row):
+        val = str(row.get(c_nome, "")).strip() if c_nome else ""
+        if val and val.lower() not in ["nan", "none", ""]:
+            return val
+        status = str(row.get(c_status, "")).strip() if c_status else ""
+        return f"Sem Cliente Vinculado ({status})" if status and status.lower() != "nan" else "Sem Cliente Vinculado"
 
     def montar_endereco(row):
         partes = []
@@ -153,29 +164,28 @@ def carregar_base_equipamentos():
         bairro = str(row.get(c_bairro, "")).strip() if c_bairro else ""
         cidade = str(row.get(c_cidade, "")).strip() if c_cidade else ""
 
-        if rua and rua.lower() != "nan":
+        if rua and rua.lower() not in ["nan", "none"]:
             partes.append(rua)
-        if num and num.lower() != "nan" and num != "0":
+        if num and num.lower() not in ["nan", "none", "0"]:
             partes.append(f"nº {num}")
-        if bairro and bairro.lower() != "nan":
+        if bairro and bairro.lower() not in ["nan", "none"]:
             partes.append(bairro)
-        if cidade and cidade.lower() != "nan":
+        if cidade and cidade.lower() not in ["nan", "none"]:
             partes.append(cidade)
 
-        return " - ".join(partes) if partes else "Endereço não informado"
+        return " - ".join(partes) if partes else "Endereço não cadastrado"
 
+    df["cliente_formatado"] = df.apply(tratar_cliente, axis=1)
     df["endereco_completo"] = df.apply(montar_endereco, axis=1)
-    df["cliente_formatado"] = df[c_nome].fillna("Cliente não identificado").astype(str).str.strip() if c_nome else "Cliente não identificado"
-    df["produto_formatado"] = df[c_prod].fillna("Máquina não especificada").astype(str).str.strip() if c_prod else "Máquina não especificada"
+    df["produto_formatado"] = (
+        df[c_prod].fillna("Máquina Café").astype(str).str.strip() 
+        if c_prod else "Máquina Café"
+    )
 
     return df
 
 def salvar_visita_na_planilha(dados):
-    """Envia a visita para a aba 'Visitas' via Webhook com allow_redirects=True."""
-    if not WEBHOOK_URL.startswith("http") or "COLE_AQUI" in WEBHOOK_URL:
-        st.warning("⚠️ O WEBHOOK_URL não foi configurado. Atendimento salvo apenas no backup local.")
-        return False
-
+    """Envia o atendimento para a aba 'Visitas' da planilha Google via Apps Script."""
     try:
         resposta = requests.post(
             WEBHOOK_URL, 
@@ -189,7 +199,7 @@ def salvar_visita_na_planilha(dados):
             st.error(f"Erro ao gravar na planilha (HTTP {resposta.status_code}): {resposta.text}")
             return False
     except Exception as e:
-        st.error(f"Falha na comunicação com o Webhook: {e}")
+        st.error(f"Falha de comunicação com o Webhook: {e}")
         return False
 
 # -------------------------------------------------------------
@@ -206,7 +216,7 @@ def tela_login(df_usuarios):
         
         if btn_login:
             if df_usuarios.empty:
-                st.error("Não foi possível carregar a lista de usuários.")
+                st.error("Não foi possível carregar a lista de usuários da planilha.")
                 return
 
             usuario_valido = df_usuarios[
@@ -247,7 +257,7 @@ def main():
 
     df_base = carregar_base_equipamentos()
 
-   # ---------------------------------------------------------
+    # ---------------------------------------------------------
     # ETAPA 1: CHECK-IN
     # ---------------------------------------------------------
     if not st.session_state["visita_ativa"]:
@@ -255,40 +265,26 @@ def main():
         st.info(f"Operador ativo: **{st.session_state['nome_abastecedor']}**")
 
         if df_base.empty:
-            st.error("⚠️ Não foi possível carregar a lista de equipamentos da folha de cálculo. Verifique a ligação à internet ou as permissões.")
+            st.error("⚠️ Base de equipamentos vazia. Verifique a planilha Google.")
+            if st.button("🔄 Forçar Atualização dos Dados"):
+                st.cache_data.clear()
+                st.rerun()
             return
 
-        # Lista de equipamentos disponíveis para facilitar a seleção ou conferência
-        lista_equipamentos = sorted(df_base["equipamento_limpo"].unique().tolist())
-
-        col_inp1, col_inp2 = st.columns([2, 1])
-        with col_inp1:
-            num_equipamento_digitado = st.text_input(
-                "Digite o Número do Equipamento:", 
-                placeholder="Ex: 02020383, 102885, 3113..."
-            ).strip().replace("*", "")
-        with col_inp2:
-            st.caption("Ou selecione na lista:")
-            eq_selecionado = st.selectbox(
-                "Pesquisa rápida:",
-                options=["Digitar manualmente..."] + lista_equipamentos,
-                label_visibility="collapsed"
-            )
-
-        # Se selecionou pela lista rápida, adota esse valor
-        if eq_selecionado != "Digitar manualmente...":
-            num_equipamento_digitado = eq_selecionado
+        num_equipamento_digitado = st.text_input(
+            "Digite o Número do Equipamento:", 
+            placeholder="Ex: 6509, 02020383, 102885, 3113..."
+        ).strip().replace("*", "")
 
         dados_maquina = None
 
         if num_equipamento_digitado:
-            num_limpo = num_equipamento_digitado.strip().lstrip("0").lower()
+            termo = num_equipamento_digitado.lower()
+            termo_sem_zero = termo.lstrip("0")
 
-            # Busca flexível: igualdade direta, sem zeros à esquerda ou contenção
             resultado = df_base[
-                (df_base["equipamento_limpo"].str.lower() == num_equipamento_digitado.lower()) |
-                (df_base["equipamento_limpo"].str.lstrip("0").str.lower() == num_limpo) |
-                (df_base["equipamento_limpo"].str.lower().str.contains(num_equipamento_digitado.lower(), regex=False))
+                (df_base["equipamento_limpo"].str.lower() == termo) |
+                (df_base["equipamento_limpo"].str.lower().str.lstrip("0") == termo_sem_zero)
             ]
 
             if not resultado.empty:
@@ -308,16 +304,16 @@ def main():
                     </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning(f"⚠️ Equipamento '{num_equipamento_digitado}' não encontrado na base. Confira se o número digitado está correto.")
+                st.warning(f"⚠️ Equipamento '{num_equipamento_digitado}' não encontrado na base. Confira o número digitado.")
 
-        st.caption("ℹ️ A geolocalização do dispositivo será registada automaticamente ao confirmar.")
+        st.caption("ℹ️ A geolocalização do aparelho será registrada automaticamente ao confirmar.")
         loc_checkin = get_geolocation()
 
         if st.button("📍 Confirmar Check-in"):
             if not num_equipamento_digitado:
-                st.error("Por favor, introduza o número do equipamento.")
+                st.error("Digite o número do equipamento.")
             elif not dados_maquina:
-                st.error("Não é possível iniciar: equipamento não localizado na base de dados.")
+                st.error("Não é possível iniciar: equipamento não localizado na planilha.")
             else:
                 coords = loc_checkin["coords"] if loc_checkin else None
                 lat = coords["latitude"] if coords else "GPS não detectado"
@@ -334,6 +330,7 @@ def main():
                     "geo_checkin": f"{lat}, {lon}"
                 }
                 st.rerun()
+
     # ---------------------------------------------------------
     # ETAPA 2: CHECK-OUT E COMPROVAÇÕES
     # ---------------------------------------------------------
@@ -404,7 +401,7 @@ def main():
                 # 1. Envia para a planilha Google
                 sucesso_planilha = salvar_visita_na_planilha(dados)
 
-                # 2. Backup local
+                # 2. Backup local em CSV
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
