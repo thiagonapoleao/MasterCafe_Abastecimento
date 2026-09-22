@@ -6,6 +6,9 @@ import urllib.parse
 import unicodedata
 import requests
 import json
+import base64
+from PIL import Image
+import io
 import streamlit.components.v1 as components
 from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
@@ -190,7 +193,7 @@ def carregar_base_equipamentos():
             continue
 
     if df_raw is None or df_raw.empty:
-        st.error("Não foi possível sincronizar com a planilha online. Verifique o compartilhamento (Leitor).")
+        st.error("Não foi possível sincronizar com a folha de cálculo online. Verifique as permissões de acesso (Leitor).")
         return pd.DataFrame()
 
     col_map = {normalizar_texto(c): c for c in df_raw.columns}
@@ -254,13 +257,13 @@ def salvar_visita_na_planilha(dados):
             WEBHOOK_URL, 
             data=json.dumps(dados),
             headers=headers,
-            timeout=20, 
+            timeout=30, 
             allow_redirects=True
         )
         if resposta.status_code == 200:
             return True
         else:
-            st.error(f"Erro ao gravar na planilha (HTTP {resposta.status_code}): {resposta.text}")
+            st.error(f"Erro ao gravar na folha de cálculo (HTTP {resposta.status_code}): {resposta.text}")
             return False
     except Exception as e:
         st.error(f"Falha de comunicação com o Webhook: {e}")
@@ -274,13 +277,13 @@ def tela_login(df_usuarios):
     
     with st.form("form_login"):
         st.subheader("Identificação do Abastecedor")
-        usuario_digitado = st.text_input("Usuário:").strip().lower()
-        senha_digitada = st.text_input("Senha:", type="password").strip()
+        usuario_digitado = st.text_input("Utilizador:").strip().lower()
+        senha_digitada = st.text_input("Palavra-passe:", type="password").strip()
         btn_login = st.form_submit_button("Entrar no Sistema")
         
         if btn_login:
             if df_usuarios.empty:
-                st.error("Não foi possível carregar a lista de usuários da planilha.")
+                st.error("Não foi possível carregar a lista de utilizadores da folha de cálculo.")
                 return
 
             usuario_valido = df_usuarios[
@@ -295,7 +298,7 @@ def tela_login(df_usuarios):
                 st.session_state["nome_abastecedor"] = nome_colaborador
                 st.rerun()
             else:
-                st.error("Usuário ou senha incorretos.")
+                st.error("Utilizador ou palavra-passe incorretos.")
 
 # -------------------------------------------------------------
 # 5. FLUXO PRINCIPAL DO APLICATIVO
@@ -309,11 +312,11 @@ def main():
 
     with st.sidebar:
         st.write(f"👤 **Abastecedor(a):**\n### {st.session_state.get('nome_abastecedor')}")
-        if st.button("🚪 Sair do Sistema"):
+        if st.button("🚪 Terminar Sessão"):
             st.session_state.clear()
             st.rerun()
 
-    st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controle de Visitas e Abastecimento</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controlo de Visitas e Abastecimento</p></div>', unsafe_allow_html=True)
 
     if "visita_ativa" not in st.session_state:
         st.session_state["visita_ativa"] = False
@@ -329,14 +332,14 @@ def main():
         st.info(f"Operador ativo: **{st.session_state['nome_abastecedor']}**")
 
         if df_base.empty:
-            st.error("Base de equipamentos vazia. Verifique a planilha Google.")
+            st.error("Base de equipamentos vazia. Verifique a folha de cálculo Google.")
             if st.button("🔄 Forçar Atualização dos Dados"):
                 st.cache_data.clear()
                 st.rerun()
             return
 
         num_equipamento_digitado = st.text_input(
-            "Digite o Número do Equipamento:", 
+            "Introduza o Número do Equipamento:", 
             placeholder="Ex: 6509, 02020383, 102885, 3113..."
         ).strip().replace("*", "")
 
@@ -368,20 +371,20 @@ def main():
                     </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning(f"Equipamento '{num_equipamento_digitado}' não encontrado na base. Confira o número digitado.")
+                st.warning(f"Equipamento '{num_equipamento_digitado}' não encontrado na base. Verifique o número introduzido.")
 
-        st.caption("A geolocalização do aparelho será registrada automaticamente ao confirmar.")
+        st.caption("A geolocalização do dispositivo será registada automaticamente ao confirmar.")
         loc_checkin = get_geolocation()
 
         if st.button("📍 Confirmar Check-in"):
             if not num_equipamento_digitado:
-                st.error("Digite o número do equipamento.")
+                st.error("Por favor, introduza o número do equipamento.")
             elif not dados_maquina:
-                st.error("Não é possível iniciar: equipamento não localizado na planilha.")
+                st.error("Não é possível iniciar: equipamento não localizado na folha de cálculo.")
             else:
                 coords = loc_checkin["coords"] if loc_checkin else None
-                lat = coords["latitude"] if coords else "GPS não detectado"
-                lon = coords["longitude"] if coords else "GPS não detectado"
+                lat = coords["latitude"] if coords else "GPS não detetado"
+                lon = coords["longitude"] if coords else "GPS não detetado"
 
                 st.session_state["visita_ativa"] = True
                 st.session_state["dados_visita"] = {
@@ -390,7 +393,7 @@ def main():
                     "cliente": dados_maquina["cliente"],
                     "produto": dados_maquina["produto"],
                     "endereco": dados_maquina["endereco"],
-                    "data_checkin": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                    "data_checkin": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "geo_checkin": f"{lat}, {lon}"
                 }
                 st.rerun()
@@ -411,14 +414,14 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
-        st.subheader("Fotos de Comprovação")
+        st.subheader("Fotografias de Comprovação")
         col1, col2 = st.columns(2)
         with col1:
             st.caption("1. Máquina Abastecida:")
-            foto_abastecida = st.camera_input("Foto Abastecida", key="foto_abast")
+            foto_abastecida = st.camera_input("Fotografia Abastecida", key="foto_abast")
         with col2:
             st.caption("2. Máquina Limpa:")
-            foto_limpa = st.camera_input("Foto Limpa", key="foto_limp")
+            foto_limpa = st.camera_input("Fotografia Limpa", key="foto_limp")
 
         st.subheader("Assinatura do Responsável")
         responsavel = st.text_input("Nome do responsável no local:").strip()
@@ -448,24 +451,40 @@ def main():
                 tem_assinatura = False
 
             if not foto_abastecida or not foto_limpa:
-                st.error("Tire ambas as fotos (abastecimento e limpeza) antes de finalizar.")
+                st.error("Tire ambas as fotografias (abastecimento e limpeza) antes de finalizar.")
             elif not responsavel:
                 st.error("Preencha o nome do responsável no cliente.")
             elif not tem_assinatura:
-                st.error("Por favor, colha a assinatura do responsável no quadro.")
+                st.error("Por favor, recolha a assinatura do responsável no quadro.")
             else:
                 coords = loc_checkout["coords"] if loc_checkout else None
-                lat_out = coords["latitude"] if coords else "GPS não detectado"
-                lon_out = coords["longitude"] if coords else "GPS não detectado"
+                lat_out = coords["latitude"] if coords else "GPS não detetado"
+                lon_out = coords["longitude"] if coords else "GPS não detetado"
 
-                dados["data_checkout"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                dados["data_checkout"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
+                # Conversão das fotografias para Base64
+                dados["foto_abastecida_b64"] = base64.b64encode(foto_abastecida.getvalue()).decode("utf-8")
+                dados["foto_limpa_b64"] = base64.b64encode(foto_limpa.getvalue()).decode("utf-8")
+
+                # Conversão da assinatura para Base64
+                try:
+                    img_array = canvas_result.image_data.astype('uint8')
+                    img_pil = Image.fromarray(img_array)
+                    buffered = io.BytesIO()
+                    img_pil.save(buffered, format="PNG")
+                    dados["assinatura_b64"] = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                except Exception:
+                    dados["assinatura_b64"] = ""
+
                 sucesso_planilha = salvar_visita_na_planilha(dados)
 
+                # Cópia de segurança local sem as cadeias Base64
+                dados_csv = {k: v for k, v in dados.items() if not k.endswith("_b64")}
                 arquivo_historico = "visitas_realizadas.csv"
-                df_reg = pd.DataFrame([dados])
+                df_reg = pd.DataFrame([dados_csv])
                 df_reg.to_csv(
                     arquivo_historico,
                     mode="a",
@@ -474,9 +493,9 @@ def main():
                 )
 
                 if sucesso_planilha:
-                    st.success("Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
+                    st.success("Atendimento e registos multimédia guardados com sucesso no Google Drive e na folha de cálculo!")
                 else:
-                    st.success("Atendimento registrado localmente com sucesso!")
+                    st.success("Atendimento registado localmente com sucesso!")
 
                 animacao_graos_cafe()
 
