@@ -69,49 +69,76 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. ANIMAÇÃO PERSONALIZADA: CHUVA DE GRÃOS DE CAFÉ
+# 2. ANIMAÇÃO PERSONALIZADA: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
 # -------------------------------------------------------------
 def animacao_graos_cafe():
+    """Injeta chuva de grãos e xícaras de café diretamente na tela principal do Streamlit."""
     animacao_html = """
-    <div id="coffee-rain-container"></div>
-    <style>
-        .coffee-bean {
-            position: fixed;
-            top: -50px;
-            font-size: 28px;
-            user-select: none;
-            pointer-events: none;
-            z-index: 999999;
-            animation: fall 3.5s linear forwards;
-        }
-        @keyframes fall {
-            0% {
-                transform: translateY(0vh) rotate(0deg);
-                opacity: 1;
-            }
-            100% {
-                transform: translateY(105vh) rotate(720deg);
-                opacity: 0;
-            }
-        }
-    </style>
     <script>
-        const container = document.getElementById("coffee-rain-container");
-        const icons = ["🫘", "☕", "🫘", "☕", "✨"];
-        for (let i = 0; i < 45; i++) {
-            const bean = document.createElement("div");
-            bean.className = "coffee-bean";
-            bean.innerText = icons[Math.floor(Math.random() * icons.length)];
-            bean.style.left = Math.random() * 95 + "vw";
-            bean.style.animationDuration = (2.2 + Math.random() * 2.3) + "s";
-            bean.style.animationDelay = (Math.random() * 1.2) + "s";
-            bean.style.fontSize = (22 + Math.random() * 20) + "px";
-            document.body.appendChild(bean);
-            setTimeout(() => bean.remove(), 6000);
+    (function() {
+        const parentDoc = window.parent.document;
+        if (!parentDoc) return;
+
+        // Cria o estilo da animação no documento principal se não existir
+        if (!parentDoc.getElementById('coffee-style')) {
+            const style = parentDoc.createElement('style');
+            style.id = 'coffee-style';
+            style.innerHTML = `
+                @keyframes fallCoffee {
+                    0% {
+                        transform: translateY(-50px) rotate(0deg);
+                        opacity: 1;
+                    }
+                    80% {
+                        opacity: 1;
+                    }
+                    100% {
+                        transform: translateY(105vh) rotate(720deg);
+                        opacity: 0;
+                    }
+                }
+                .coffee-fall-item {
+                    position: fixed;
+                    top: 0;
+                    user-select: none;
+                    pointer-events: none;
+                    z-index: 9999999;
+                    animation-name: fallCoffee;
+                    animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+                    animation-fill-mode: forwards;
+                }
+            `;
+            parentDoc.head.appendChild(style);
         }
+
+        const icons = ['🫘', '☕', '🫘', '☕', '✨'];
+        const total = 50;
+
+        for (let i = 0; i < total; i++) {
+            const el = parentDoc.createElement('div');
+            el.className = 'coffee-fall-item';
+            el.innerText = icons[Math.floor(Math.random() * icons.length)];
+            
+            // Posições e tamanhos aleatórios
+            el.style.left = (Math.random() * 94) + 'vw';
+            const duracao = (2.2 + Math.random() * 2.5);
+            el.style.animationDuration = duracao + 's';
+            el.style.animationDelay = (Math.random() * 0.8) + 's';
+            el.style.fontSize = (22 + Math.random() * 22) + 'px';
+            
+            parentDoc.body.appendChild(el);
+
+            // Remove o elemento após a queda
+            setTimeout(() => {
+                if (el && el.parentNode) {
+                    el.parentNode.removeChild(el);
+                }
+            }, (duracao + 1.2) * 1000);
+        }
+    })();
     </script>
     """
-    components.html(animacao_html, height=0)
+    components.html(animacao_html, height=0, width=0)
 
 # -------------------------------------------------------------
 # 3. CONEXÃO COM A PLANILHA MASTER CAFÉ
@@ -452,11 +479,12 @@ def main():
                     index=False
                 )
 
-                if sucesso_planilha:
-                    st.success("Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
+               if sucesso_planilha:
+                    st.success("✅ Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
                 else:
-                    st.success("Atendimento registrado localmente com sucesso!")
+                    st.success("✅ Atendimento registrado localmente com sucesso!")
 
+                # Dispara a chuva de café na tela inteira
                 animacao_graos_cafe()
 
                 st.session_state["visita_ativa"] = False
