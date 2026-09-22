@@ -71,12 +71,13 @@ st.markdown("""
 # -------------------------------------------------------------
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 GID_USUARIOS = "1642053143"
+GID_CLIENTES = "0"  # GID da aba Clientes
 
-# COLE AQUI A URL GERADA NA IMPLANTAÇÃO DO APPS SCRIPT (COMEÇA COM https://script.google.com/macros/s/...)
+# Cole aqui a URL gerada na Implantação do seu Google Apps Script
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
+
 def normalizar_texto(texto):
-    """Remove acentuações, caracteres especiais e coloca em minúsculo."""
     if not isinstance(texto, str):
         texto = str(texto)
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
@@ -84,128 +85,98 @@ def normalizar_texto(texto):
 
 @st.cache_data(ttl=60)
 def carregar_usuarios():
-    """
-    Carrega os dados de login da aba de utilizadores com fallback multinível.
-    """
-    # 1. Tentar endpoint direto de exportação CSV por GID
-    urls_tentativas = [
+    """Carrega usuários cadastrados com fallback tolerante a falhas."""
+    urls = [       
         f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143",
         f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&gid=1642053143",
         f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&sheet=Usuarios"
     ]
-    
-    df_carregado = pd.DataFrame()
-
-    for url in urls_tentativas:
+    for url in urls:
         try:
-            df = pd.read_csv(
-                url,
-                engine="python",
-                on_bad_lines="skip",
-                dtype=str
-            )
+            df = pd.read_csv(url, engine="python", on_bad_lines="skip", dtype=str)
             if not df.empty:
                 df.columns = [normalizar_texto(c) for c in df.columns]
                 if "usuario" in df.columns and "senha" in df.columns:
-                    df_carregado = df
-                    break
+                    df["usuario"] = df["usuario"].fillna("").astype(str).str.strip().str.lower()
+                    df["senha"] = df["senha"].fillna("").astype(str).str.strip()
+                    df["nome"] = df["nome"].fillna(df["usuario"]).astype(str).str.strip() if "nome" in df.columns else df["usuario"]
+                    return df
         except Exception:
             continue
 
-    # 2. Se obteve sucesso online, formata os campos
-    if not df_carregado.empty:
-        df_carregado["usuario"] = df_carregado["usuario"].fillna("").astype(str).str.strip().str.lower()
-        df_carregado["senha"] = df_carregado["senha"].fillna("").astype(str).str.strip()
-        if "nome" not in df_carregado.columns:
-            df_carregado["nome"] = df_carregado["usuario"]
-        else:
-            df_carregado["nome"] = df_carregado["nome"].fillna(df_carregado["usuario"]).astype(str).str.strip()
-        return df_carregado
-
-    # 3. Fallback de segurança caso a folha esteja temporariamente inacessível
-    st.warning("⚠️ Não foi possível sincronizar online com a folha de utilizadores. A usar credenciais de contingência.")
-    return pd.DataFrame([
-        {"usuario": "napoleao", "senha": "123", "nome": "Thiago Napoleão"}
-    ])
+    # Contingência padrão caso a planilha esteja momentaneamente inacessível
+    return pd.DataFrame([{"usuario": "napoleao", "senha": "123", "nome": "Thiago Napoleão"}])
 
 @st.cache_data(ttl=60)
 def carregar_base_equipamentos():
-    """Carrega a aba 'Clientes' mapeando Equipamento, Nome Fantasia, Produto e Endereço."""
-    nome_aba = urllib.parse.quote("Clientes")
-    url = "https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0"
+    """Carrega os dados da aba 'Clientes' de forma blindada contra KeyError."""
+    urls = [
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0",
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&gid=0",
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&sheet=Clientes"
+    ]
+    
+    df_raw = None
+    for url in urls:
+        try:
+            df_temp = pd.read_csv(url, engine="python", on_bad_lines="skip", dtype=str)
+            if not df_temp.empty and len(df_temp.columns) > 3:
+                df_raw = df_temp
+                break
+        except Exception:
+            continue
 
-    try:
-        df = pd.read_csv(
-            url,
-            engine="python",
-            on_bad_lines="skip",
-            dtype=str
-        )
-        
-        mapa_colunas = {}
-        for col in df.columns:
-            norm = normalizar_texto(col)
-            if norm == "equipamento":
-                mapa_colunas["equipamento"] = col
-            elif norm == "nome fantasia":
-                mapa_colunas["nome_fantasia"] = col
-            elif norm == "produto":
-                mapa_colunas["produto"] = col
-            elif norm == "endereco":
-                mapa_colunas["endereco"] = col
-            elif norm == "numero endereco":
-                mapa_colunas["numero"] = col
-            elif norm == "bairro":
-                mapa_colunas["bairro"] = col
-            elif norm == "municipio":
-                mapa_colunas["municipio"] = col
-
-        col_eq = mapa_colunas.get("equipamento", "Equipamento")
-        col_cli = mapa_colunas.get("nome_fantasia", "Nome Fantasia")
-        col_prod = mapa_colunas.get("produto", "Produto")
-        col_end = mapa_colunas.get("endereco", "Endereço")
-        col_num = mapa_colunas.get("numero", "Numero Endereço")
-        col_bairro = mapa_colunas.get("bairro", "Bairro")
-        col_cidade = mapa_colunas.get("municipio", "Município")
-
-        df = df[df[col_eq].notna()].copy()
-        df["equipamento_limpo"] = df[col_eq].astype(str).str.replace("*", "", regex=False).str.strip()
-
-        def formatar_endereco(row):
-            partes = []
-            rua = str(row.get(col_end, "")).strip()
-            num = str(row.get(col_num, "")).strip()
-            bairro = str(row.get(col_bairro, "")).strip()
-            cidade = str(row.get(col_cidade, "")).strip()
-            
-            if rua and rua.lower() != "nan":
-                partes.append(rua)
-            if num and num.lower() != "nan" and num != "0":
-                partes.append(f"nº {num}")
-            if bairro and bairro.lower() != "nan":
-                partes.append(bairro)
-            if cidade and cidade.lower() != "nan":
-                partes.append(cidade)
-                
-            return " - ".join(partes) if partes else "Endereço não informado"
-
-        df["endereco_completo"] = df.apply(formatar_endereco, axis=1)
-        df["cliente_formatado"] = df[col_cli].fillna("Cliente não identificado").astype(str).str.strip()
-        df["produto_formatado"] = df[col_prod].fillna("Máquina não especificada").astype(str).str.strip()
-
-        return df
-    except Exception as e:
-        st.error(f"Erro ao carregar dados da planilha Google: {e}")
+    if df_raw is None or df_raw.empty:
+        st.error("Não foi possível carregar a aba de clientes. Verifique se a planilha está pública como Leitor.")
         return pd.DataFrame()
 
+    # Mapeia colunas normalizadas
+    col_map = {normalizar_texto(c): c for c in df_raw.columns}
+
+    # Identifica colunas ou usa fallbacks seguros
+    c_equip = col_map.get("equipamento", df_raw.columns[1] if len(df_raw.columns) > 1 else df_raw.columns[0])
+    c_nome = col_map.get("nome fantasia", col_map.get("cliente", None))
+    c_prod = col_map.get("produto", None)
+    c_end = col_map.get("endereco", None)
+    c_num = col_map.get("numero endereco", None)
+    c_bairro = col_map.get("bairro", None)
+    c_cidade = col_map.get("municipio", None)
+
+    # Filtra linhas onde equipamento existe
+    df = df_raw[df_raw[c_equip].notna()].copy()
+    df["equipamento_limpo"] = df[c_equip].astype(str).str.replace("*", "", regex=False).str.strip()
+
+    def montar_endereco(row):
+        partes = []
+        rua = str(row.get(c_end, "")).strip() if c_end else ""
+        num = str(row.get(c_num, "")).strip() if c_num else ""
+        bairro = str(row.get(c_bairro, "")).strip() if c_bairro else ""
+        cidade = str(row.get(c_cidade, "")).strip() if c_cidade else ""
+
+        if rua and rua.lower() != "nan":
+            partes.append(rua)
+        if num and num.lower() != "nan" and num != "0":
+            partes.append(f"nº {num}")
+        if bairro and bairro.lower() != "nan":
+            partes.append(bairro)
+        if cidade and cidade.lower() != "nan":
+            partes.append(cidade)
+
+        return " - ".join(partes) if partes else "Endereço não informado"
+
+    df["endereco_completo"] = df.apply(montar_endereco, axis=1)
+    df["cliente_formatado"] = df[c_nome].fillna("Cliente não identificado").astype(str).str.strip() if c_nome else "Cliente não identificado"
+    df["produto_formatado"] = df[c_prod].fillna("Máquina não especificada").astype(str).str.strip() if c_prod else "Máquina não especificada"
+
+    return df
+
 def salvar_visita_na_planilha(dados):
-    """Envia a visita para a aba 'Visitas' da planilha via Google Apps Script Webhook com suporte a redirects."""
+    """Envia a visita para a aba 'Visitas' via Webhook com allow_redirects=True."""
     if not WEBHOOK_URL.startswith("http") or "COLE_AQUI" in WEBHOOK_URL:
-        st.warning("⚠️ O WEBHOOK_URL não foi configurado. O atendimento foi gravado apenas no backup local CSV.")
+        st.warning("⚠️ O WEBHOOK_URL não foi configurado. Atendimento salvo apenas no backup local.")
         return False
 
     try:
-        # allow_redirects=True é mandatório para o endpoint do Google Apps Script
         resposta = requests.post(
             WEBHOOK_URL, 
             json=dados, 
@@ -215,10 +186,10 @@ def salvar_visita_na_planilha(dados):
         if resposta.status_code == 200:
             return True
         else:
-            st.error(f"Erro ao gravar na planilha (Status HTTP {resposta.status_code}): {resposta.text}")
+            st.error(f"Erro ao gravar na planilha (HTTP {resposta.status_code}): {resposta.text}")
             return False
     except Exception as e:
-        st.error(f"Falha na comunicação com o Webhook da planilha: {e}")
+        st.error(f"Falha na comunicação com o Webhook: {e}")
         return False
 
 # -------------------------------------------------------------
@@ -235,7 +206,7 @@ def tela_login(df_usuarios):
         
         if btn_login:
             if df_usuarios.empty:
-                st.error("Não foi possível carregar a lista de usuários da planilha.")
+                st.error("Não foi possível carregar a lista de usuários.")
                 return
 
             usuario_valido = df_usuarios[
@@ -281,7 +252,6 @@ def main():
     # ---------------------------------------------------------
     if not st.session_state["visita_ativa"]:
         st.subheader("1. Iniciar Atendimento (Check-in)")
-
         st.info(f"Operador ativo: **{st.session_state['nome_abastecedor']}**")
 
         num_equipamento_digitado = st.text_input(
@@ -408,10 +378,10 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # 1. Envio para a aba 'Visitas' da planilha Google
+                # 1. Envia para a planilha Google
                 sucesso_planilha = salvar_visita_na_planilha(dados)
 
-                # 2. Gravação de backup local
+                # 2. Backup local
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
