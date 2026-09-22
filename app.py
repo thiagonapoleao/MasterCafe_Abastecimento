@@ -72,7 +72,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. ANIMAÇÃO: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
+# 2. DEFINIÇÃO DAS VARIÁVEIS GLOBAIS E LINKS
+# -------------------------------------------------------------
+WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
+SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
+GID_USUARIOS = "1642053143"
+GID_CLIENTES = "0"
+
+# -------------------------------------------------------------
+# 3. ANIMAÇÃO: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
 # -------------------------------------------------------------
 def animacao_graos_cafe():
     animacao_html = """
@@ -138,14 +146,8 @@ def animacao_graos_cafe():
     components.html(animacao_html, height=0, width=0)
 
 # -------------------------------------------------------------
-# 3. CONEXÃO COM A PLANILHA MASTER CAFÉ
+# 4. FUNÇÕES DE SUPORTE E LEITURA DA PLANILHA
 # -------------------------------------------------------------
-SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
-GID_USUARIOS = "1642053143"
-GID_CLIENTES = "0"
-
-EBHOOK_URL = "https://script.google.com/macros/s/AKfycbz29P22qs_RBA6halAkFlnwh8phr76zVsq7giCAwXfPIPBafgkhLUiPSLkSbEwBukEJAg/exec"
-
 def normalizar_texto(texto):
     if not isinstance(texto, str):
         texto = str(texto)
@@ -153,7 +155,7 @@ def normalizar_texto(texto):
     return texto.strip().lower()
 
 def comprimir_imagem(buffer_arquivo, max_largura=900, qualidade=70):
-    """Comprime e converte para JPEG leve para garantir envio rápido via Webhook."""
+    """Comprime e redimensiona a foto para JPEG leve para envio rápido via Webhook."""
     try:
         img = Image.open(buffer_arquivo)
         if img.mode in ("RGBA", "P"):
@@ -268,9 +270,8 @@ def carregar_base_equipamentos():
     return df
 
 def salvar_visita_na_planilha(dados):
-    """Envia os dados via POST com suporte a redirects do Google Apps Script."""
+    """Envia os dados via POST para o Google Apps Script Webhook."""
     try:
-        # text/plain evita bloqueios de CORS e pré-flight nos endpoints do Google
         headers = {"Content-Type": "text/plain;charset=utf-8"}
         corpo = json.dumps(dados)
 
@@ -299,7 +300,7 @@ def salvar_visita_na_planilha(dados):
         return False, f"Falha na comunicação: {str(e)}"
 
 # -------------------------------------------------------------
-# 4. TELA DE LOGIN
+# 5. TELA DE LOGIN
 # -------------------------------------------------------------
 def tela_login(df_usuarios):
     st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Portal de Abastecimento</p></div>', unsafe_allow_html=True)
@@ -330,7 +331,7 @@ def tela_login(df_usuarios):
                 st.error("Usuário ou senha incorretos.")
 
 # -------------------------------------------------------------
-# 5. FLUXO PRINCIPAL DO APLICATIVO
+# 6. FLUXO PRINCIPAL DO APLICATIVO
 # -------------------------------------------------------------
 def main():
     df_usuarios = carregar_usuarios()
@@ -495,7 +496,6 @@ def main():
                 dados["responsavel"] = responsavel
 
                 with st.spinner("Enviando dados e imagens para a planilha e Google Drive..."):
-                    # Comprime fotos para JPEG leve (~120KB) para não travar o Webhook
                     dados["foto_abastecida_b64"] = comprimir_imagem(foto_abastecida, max_largura=900, qualidade=70)
                     dados["foto_limpa_b64"] = comprimir_imagem(foto_limpa, max_largura=900, qualidade=70)
 
@@ -510,7 +510,7 @@ def main():
 
                     sucesso, msg = salvar_visita_na_planilha(dados)
 
-                # Backup local em CSV (sem os textos Base64)
+                # Salva no backup local
                 dados_csv = {k: v for k, v in dados.items() if not k.endswith("_b64")}
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados_csv])
