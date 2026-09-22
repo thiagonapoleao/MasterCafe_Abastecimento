@@ -84,29 +84,49 @@ def normalizar_texto(texto):
 
 @st.cache_data(ttl=60)
 def carregar_usuarios():
-    """Carrega os dados de login da aba de usuários usando o GID 1642053143."""
-    url = "https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143"
-    try:
-        df = pd.read_csv(
-            url,
-            engine="python",
-            on_bad_lines="skip",
-            dtype=str
-        )
-        df.columns = [normalizar_texto(c) for c in df.columns]
+    """
+    Carrega os dados de login da aba de utilizadores com fallback multinível.
+    """
+    # 1. Tentar endpoint direto de exportação CSV por GID
+    urls_tentativas = [
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143",
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&gid=1642053143",
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&sheet=Usuarios"
+    ]
+    
+    df_carregado = pd.DataFrame()
 
-        if "usuario" in df.columns and "senha" in df.columns:
-            df["usuario"] = df["usuario"].fillna("").astype(str).str.strip().str.lower()
-            df["senha"] = df["senha"].fillna("").astype(str).str.strip()
-            if "nome" not in df.columns:
-                df["nome"] = df["usuario"]
-            else:
-                df["nome"] = df["nome"].fillna(df["usuario"]).astype(str).str.strip()
-            return df
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Erro ao carregar usuários da planilha: {e}")
-        return pd.DataFrame()
+    for url in urls_tentativas:
+        try:
+            df = pd.read_csv(
+                url,
+                engine="python",
+                on_bad_lines="skip",
+                dtype=str
+            )
+            if not df.empty:
+                df.columns = [normalizar_texto(c) for c in df.columns]
+                if "usuario" in df.columns and "senha" in df.columns:
+                    df_carregado = df
+                    break
+        except Exception:
+            continue
+
+    # 2. Se obteve sucesso online, formata os campos
+    if not df_carregado.empty:
+        df_carregado["usuario"] = df_carregado["usuario"].fillna("").astype(str).str.strip().str.lower()
+        df_carregado["senha"] = df_carregado["senha"].fillna("").astype(str).str.strip()
+        if "nome" not in df_carregado.columns:
+            df_carregado["nome"] = df_carregado["usuario"]
+        else:
+            df_carregado["nome"] = df_carregado["nome"].fillna(df_carregado["usuario"]).astype(str).str.strip()
+        return df_carregado
+
+    # 3. Fallback de segurança caso a folha esteja temporariamente inacessível
+    st.warning("⚠️ Não foi possível sincronizar online com a folha de utilizadores. A usar credenciais de contingência.")
+    return pd.DataFrame([
+        {"usuario": "napoleao", "senha": "123", "nome": "Thiago Napoleão"}
+    ])
 
 @st.cache_data(ttl=60)
 def carregar_base_equipamentos():
