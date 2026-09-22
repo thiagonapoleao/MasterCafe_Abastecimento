@@ -455,11 +455,13 @@ def main():
                     index=False
                 )
 
-                if sucesso_planilha:
+               if sucesso_planilha:
                     st.success("✅ Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
                 else:
                     st.success("✅ Atendimento registrado localmente com sucesso!")
-                st.balloons()
+
+                # Efeito personalizado com grãos de café e xícaras
+                animacao_graos_cafe()
 
                 st.session_state["visita_ativa"] = False
                 st.session_state["dados_visita"] = {}
