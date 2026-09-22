@@ -5,9 +5,10 @@ import os
 import urllib.parse
 import unicodedata
 import requests
+import json
+import streamlit.components.v1 as components
 from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
-import streamlit.components.v1 as components
 
 # -------------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA E DESIGN (DARK MODE / CORPORATIVO)
@@ -67,8 +68,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# -------------------------------------------------------------
+# 2. ANIMAÇÃO PERSONALIZADA: CHUVA DE GRÃOS DE CAFÉ
+# -------------------------------------------------------------
 def animacao_graos_cafe():
-    """Gera uma chuva de grãos de café e xícaras na tela ao concluir o atendimento."""
     animacao_html = """
     <div id="coffee-rain-container"></div>
     <style>
@@ -111,7 +114,7 @@ def animacao_graos_cafe():
     components.html(animacao_html, height=0)
 
 # -------------------------------------------------------------
-# 2. CONEXÃO COM A PLANILHA MASTER CAFÉ
+# 3. CONEXÃO COM A PLANILHA MASTER CAFÉ
 # -------------------------------------------------------------
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 GID_USUARIOS = "1642053143"
@@ -120,7 +123,6 @@ GID_CLIENTES = "0"
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
 def normalizar_texto(texto):
-    """Remove acentuações, caracteres especiais e coloca em minúsculo."""
     if not isinstance(texto, str):
         texto = str(texto)
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
@@ -128,7 +130,6 @@ def normalizar_texto(texto):
 
 @st.cache_data(ttl=60)
 def carregar_usuarios():
-    """Carrega os usuários da planilha com tratamento robusto a falhas."""
     urls = [
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID_USUARIOS}",
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid={GID_USUARIOS}",
@@ -147,12 +148,10 @@ def carregar_usuarios():
         except Exception:
             continue
 
-    # Fallback padrão caso a planilha esteja momentaneamente fora do ar
     return pd.DataFrame([{"usuario": "napoleao", "senha": "123", "nome": "Thiago Napoleão"}])
 
 @st.cache_data(ttl=30)
 def carregar_base_equipamentos():
-    """Carrega a aba 'Clientes' mapeando máquinas com ou sem cliente vinculado."""
     urls = [
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid={GID_CLIENTES}",
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid={GID_CLIENTES}",
@@ -170,7 +169,7 @@ def carregar_base_equipamentos():
             continue
 
     if df_raw is None or df_raw.empty:
-        st.error("⚠️ Não foi possível sincronizar com a planilha online. Verifique o compartilhamento (Leitor).")
+        st.error("Não foi possível sincronizar com a planilha online. Verifique o compartilhamento (Leitor).")
         return pd.DataFrame()
 
     col_map = {normalizar_texto(c): c for c in df_raw.columns}
@@ -186,7 +185,6 @@ def carregar_base_equipamentos():
 
     df = df_raw[df_raw[c_equip].notna()].copy()
     
-    # Limpa o número do equipamento (remove *, espaços e formatações soltas)
     df["equipamento_limpo"] = (
         df[c_equip]
         .astype(str)
@@ -229,12 +227,13 @@ def carregar_base_equipamentos():
     return df
 
 def salvar_visita_na_planilha(dados):
-    """Envia o atendimento para a aba 'Visitas' da planilha Google via Apps Script."""
     try:
+        headers = {"Content-Type": "application/json"}
         resposta = requests.post(
             WEBHOOK_URL, 
-            json=dados, 
-            timeout=15, 
+            data=json.dumps(dados),
+            headers=headers,
+            timeout=20, 
             allow_redirects=True
         )
         if resposta.status_code == 200:
@@ -247,7 +246,7 @@ def salvar_visita_na_planilha(dados):
         return False
 
 # -------------------------------------------------------------
-# 3. TELA DE LOGIN
+# 4. TELA DE LOGIN
 # -------------------------------------------------------------
 def tela_login(df_usuarios):
     st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Portal de Abastecimento</p></div>', unsafe_allow_html=True)
@@ -278,7 +277,7 @@ def tela_login(df_usuarios):
                 st.error("Usuário ou senha incorretos.")
 
 # -------------------------------------------------------------
-# 4. FLUXO PRINCIPAL DO APLICATIVO
+# 5. FLUXO PRINCIPAL DO APLICATIVO
 # -------------------------------------------------------------
 def main():
     df_usuarios = carregar_usuarios()
@@ -309,7 +308,7 @@ def main():
         st.info(f"Operador ativo: **{st.session_state['nome_abastecedor']}**")
 
         if df_base.empty:
-            st.error("⚠️ Base de equipamentos vazia. Verifique a planilha Google.")
+            st.error("Base de equipamentos vazia. Verifique a planilha Google.")
             if st.button("🔄 Forçar Atualização dos Dados"):
                 st.cache_data.clear()
                 st.rerun()
@@ -348,9 +347,9 @@ def main():
                     </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning(f"⚠️ Equipamento '{num_equipamento_digitado}' não encontrado na base. Confira o número digitado.")
+                st.warning(f"Equipamento '{num_equipamento_digitado}' não encontrado na base. Confira o número digitado.")
 
-        st.caption("ℹ️ A geolocalização do aparelho será registrada automaticamente ao confirmar.")
+        st.caption("A geolocalização do aparelho será registrada automaticamente ao confirmar.")
         loc_checkin = get_geolocation()
 
         if st.button("📍 Confirmar Check-in"):
@@ -442,10 +441,8 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # 1. Envia para a planilha Google
                 sucesso_planilha = salvar_visita_na_planilha(dados)
 
-                # 2. Backup local em CSV
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
@@ -455,12 +452,11 @@ def main():
                     index=False
                 )
 
-               if sucesso_planilha:
-                    st.success("✅ Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
+                if sucesso_planilha:
+                    st.success("Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
                 else:
-                    st.success("✅ Atendimento registrado localmente com sucesso!")
+                    st.success("Atendimento registrado localmente com sucesso!")
 
-                # Efeito personalizado com grãos de café e xícaras
                 animacao_graos_cafe()
 
                 st.session_state["visita_ativa"] = False
