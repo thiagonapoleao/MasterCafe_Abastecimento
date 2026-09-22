@@ -72,7 +72,7 @@ st.markdown("""
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 GID_USUARIOS = "1642053143"
 
-# URL do Webhook do Google Apps Script para salvar na aba "Visitas"
+# COLE AQUI A URL GERADA NA IMPLANTAÇÃO DO APPS SCRIPT (COMEÇA COM https://script.google.com/macros/s/...)
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
 def normalizar_texto(texto):
@@ -84,10 +84,8 @@ def normalizar_texto(texto):
 
 @st.cache_data(ttl=60)
 def carregar_usuarios():
-    """
-    Carrega os dados de login da aba de usuários usando o GID 1642053143.
-    """
-    url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&gid={GID_USUARIOS}"
+    """Carrega os dados de login da aba de usuários usando o GID 1642053143."""
+    url = f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=1642053143#gid=1642053143"
     try:
         df = pd.read_csv(
             url,
@@ -112,12 +110,9 @@ def carregar_usuarios():
 
 @st.cache_data(ttl=60)
 def carregar_base_equipamentos():
-    """
-    Carrega os dados da aba 'Clientes' mapeando Equipamento, Nome Fantasia,
-    Produto e Endereço completo.
-    """
+    """Carrega a aba 'Clientes' mapeando Equipamento, Nome Fantasia, Produto e Endereço."""
     nome_aba = urllib.parse.quote("Clientes")
-    url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_aba}"
+    url = f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0"
 
     try:
         df = pd.read_csv(
@@ -184,17 +179,27 @@ def carregar_base_equipamentos():
         return pd.DataFrame()
 
 def salvar_visita_na_planilha(dados):
-    """
-    Envia a visita diretamente para a aba 'Visitas' da planilha via Google Apps Script Webhook.
-    """
-    if WEBHOOK_URL.startswith("http"):
-        try:
-            resposta = requests.post(WEBHOOK_URL, json=dados, timeout=10)
-            if resposta.status_code == 200:
-                return True
-        except Exception as e:
-            st.warning(f"Não foi possível sincronizar na planilha Google online: {e}")
-    return False
+    """Envia a visita para a aba 'Visitas' da planilha via Google Apps Script Webhook com suporte a redirects."""
+    if not WEBHOOK_URL.startswith("http") or "COLE_AQUI" in WEBHOOK_URL:
+        st.warning("⚠️ O WEBHOOK_URL não foi configurado. O atendimento foi gravado apenas no backup local CSV.")
+        return False
+
+    try:
+        # allow_redirects=True é mandatório para o endpoint do Google Apps Script
+        resposta = requests.post(
+            WEBHOOK_URL, 
+            json=dados, 
+            timeout=15, 
+            allow_redirects=True
+        )
+        if resposta.status_code == 200:
+            return True
+        else:
+            st.error(f"Erro ao gravar na planilha (Status HTTP {resposta.status_code}): {resposta.text}")
+            return False
+    except Exception as e:
+        st.error(f"Falha na comunicação com o Webhook da planilha: {e}")
+        return False
 
 # -------------------------------------------------------------
 # 3. TELA DE LOGIN
@@ -383,10 +388,10 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # Envio para a aba 'Visitas' da planilha Google
+                # 1. Envio para a aba 'Visitas' da planilha Google
                 sucesso_planilha = salvar_visita_na_planilha(dados)
 
-                # Gravação de backup local
+                # 2. Gravação de backup local
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados])
                 df_reg.to_csv(
