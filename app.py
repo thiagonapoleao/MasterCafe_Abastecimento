@@ -112,7 +112,7 @@ def carregar_usuarios():
 def carregar_base_equipamentos():
     """Carrega a aba 'Clientes' mapeando Equipamento, Nome Fantasia, Produto e Endereço."""
     nome_aba = urllib.parse.quote("Clientes")
-    url = f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0"
+    url = "https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0"
 
     try:
         df = pd.read_csv(
