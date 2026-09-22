@@ -136,7 +136,11 @@ def carregar_base_equipamentos():
     Produto e Endereço completo.
     """
     nome_aba = urllib.parse.quote("Clientes")
-    url = f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0"
+      urls = [
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/edit?pli=1&gid=0#gid=0",
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&gid=0",
+        f"https://docs.google.com/spreadsheets/d/1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU/gviz/tq?tqx=out:csv&sheet=Clientes"
+    ]
 
     try:
         df = pd.read_csv(
