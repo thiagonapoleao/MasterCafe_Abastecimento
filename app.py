@@ -14,7 +14,7 @@ from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
 
 # -------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA PÁGINA E DESIGN (DARK MODE / CORPORATIVO)
+# 1. CONFIGURAÇÃO DA PÁGINA E ESTILO VISUAL (DARK MODE)
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="Master Café - Gestão de Visitas",
@@ -72,7 +72,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. ANIMAÇÃO PERSONALIZADA: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
+# 2. ANIMAÇÃO: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
 # -------------------------------------------------------------
 def animacao_graos_cafe():
     animacao_html = """
@@ -152,14 +152,13 @@ def normalizar_texto(texto):
     texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
     return texto.strip().lower()
 
-def comprimir_imagem(buffer_arquivo, max_largura=1024, qualidade=75):
-    """Redimensiona e comprime a imagem para não estourar o limite do Webhook."""
+def comprimir_imagem(buffer_arquivo, max_largura=900, qualidade=70):
+    """Comprime e converte para JPEG leve para garantir envio rápido via Webhook."""
     try:
         img = Image.open(buffer_arquivo)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         
-        # Redimensiona mantendo a proporção se for maior que max_largura
         if img.width > max_largura:
             altura = int((max_largura / img.width) * img.height)
             img = img.resize((max_largura, altura), Image.Resampling.LANCZOS)
@@ -167,7 +166,7 @@ def comprimir_imagem(buffer_arquivo, max_largura=1024, qualidade=75):
         saida = io.BytesIO()
         img.save(saida, format="JPEG", quality=qualidade, optimize=True)
         return base64.b64encode(saida.getvalue()).decode("utf-8")
-    except Exception as e:
+    except Exception:
         return ""
 
 @st.cache_data(ttl=60)
@@ -211,7 +210,7 @@ def carregar_base_equipamentos():
             continue
 
     if df_raw is None or df_raw.empty:
-        st.error("Não foi possível sincronizar com a planilha online. Verifique o compartilhamento (Leitor).")
+        st.error("Não foi possível sincronizar com a planilha online. Verifique as permissões de acesso.")
         return pd.DataFrame()
 
     col_map = {normalizar_texto(c): c for c in df_raw.columns}
@@ -269,23 +268,35 @@ def carregar_base_equipamentos():
     return df
 
 def salvar_visita_na_planilha(dados):
+    """Envia os dados via POST com suporte a redirects do Google Apps Script."""
     try:
-        headers = {"Content-Type": "application/json"}
+        # text/plain evita bloqueios de CORS e pré-flight nos endpoints do Google
+        headers = {"Content-Type": "text/plain;charset=utf-8"}
+        corpo = json.dumps(dados)
+
         resposta = requests.post(
-            WEBHOOK_URL, 
-            data=json.dumps(dados),
+            WEBHOOK_URL,
+            data=corpo,
             headers=headers,
-            timeout=40, 
+            timeout=45,
             allow_redirects=True
         )
+
         if resposta.status_code == 200:
-            return True
+            try:
+                ret = resposta.json()
+                if ret.get("status") == "success":
+                    return True, "Gravado com sucesso no Google Drive e na planilha!"
+                elif ret.get("status") == "error":
+                    return False, f"Aviso do Apps Script: {ret.get('message')}"
+            except Exception:
+                if "success" in resposta.text.lower():
+                    return True, "Gravado com sucesso!"
+            return True, "Atendimento registrado na planilha Google."
         else:
-            st.error(f"Erro ao gravar na planilha (HTTP {resposta.status_code}): {resposta.text}")
-            return False
+            return False, f"Erro HTTP {resposta.status_code}: {resposta.text[:180]}"
     except Exception as e:
-        st.error(f"Falha de comunicação com o Webhook: {e}")
-        return False
+        return False, f"Falha na comunicação: {str(e)}"
 
 # -------------------------------------------------------------
 # 4. TELA DE LOGIN
@@ -483,23 +494,23 @@ def main():
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
 
-                # Otimização e conversão das fotos para Base64 leve
-                dados["foto_abastecida_b64"] = comprimir_imagem(foto_abastecida, max_largura=1024, qualidade=75)
-                dados["foto_limpa_b64"] = comprimir_imagem(foto_limpa, max_largura=1024, qualidade=75)
+                with st.spinner("Enviando dados e imagens para a planilha e Google Drive..."):
+                    # Comprime fotos para JPEG leve (~120KB) para não travar o Webhook
+                    dados["foto_abastecida_b64"] = comprimir_imagem(foto_abastecida, max_largura=900, qualidade=70)
+                    dados["foto_limpa_b64"] = comprimir_imagem(foto_limpa, max_largura=900, qualidade=70)
 
-                # Conversão da assinatura para PNG Base64
-                try:
-                    img_array = canvas_result.image_data.astype('uint8')
-                    img_pil = Image.fromarray(img_array)
-                    buf = io.BytesIO()
-                    img_pil.save(buf, format="PNG")
-                    dados["assinatura_b64"] = base64.b64encode(buf.getvalue()).decode("utf-8")
-                except Exception:
-                    dados["assinatura_b64"] = ""
+                    try:
+                        img_array = canvas_result.image_data.astype('uint8')
+                        img_pil = Image.fromarray(img_array)
+                        buf = io.BytesIO()
+                        img_pil.save(buf, format="PNG")
+                        dados["assinatura_b64"] = base64.b64encode(buf.getvalue()).decode("utf-8")
+                    except Exception:
+                        dados["assinatura_b64"] = ""
 
-                sucesso_planilha = salvar_visita_na_planilha(dados)
+                    sucesso, msg = salvar_visita_na_planilha(dados)
 
-                # Backup local em CSV (sem Base64 para não inflar o arquivo)
+                # Backup local em CSV (sem os textos Base64)
                 dados_csv = {k: v for k, v in dados.items() if not k.endswith("_b64")}
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados_csv])
@@ -510,12 +521,11 @@ def main():
                     index=False
                 )
 
-                if sucesso_planilha:
-                    st.success("✅ Atendimento e fotos salvos com sucesso no Google Drive e na planilha!")
+                if sucesso:
+                    st.success("✅ Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
+                    animacao_graos_cafe()
                 else:
-                    st.success("✅ Atendimento registrado localmente!")
-
-                animacao_graos_cafe()
+                    st.warning(f"⚠️ {msg}. Os dados foram salvos no backup local do aplicativo.")
 
                 st.session_state["visita_ativa"] = False
                 st.session_state["dados_visita"] = {}
