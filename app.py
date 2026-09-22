@@ -72,14 +72,12 @@ st.markdown("""
 # 2. ANIMAÇÃO PERSONALIZADA: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
 # -------------------------------------------------------------
 def animacao_graos_cafe():
-    """Injeta chuva de grãos e xícaras de café diretamente na tela principal do Streamlit."""
     animacao_html = """
     <script>
     (function() {
         const parentDoc = window.parent.document;
         if (!parentDoc) return;
 
-        // Cria o estilo da animação no documento principal se não existir
         if (!parentDoc.getElementById('coffee-style')) {
             const style = parentDoc.createElement('style');
             style.id = 'coffee-style';
@@ -118,17 +116,13 @@ def animacao_graos_cafe():
             const el = parentDoc.createElement('div');
             el.className = 'coffee-fall-item';
             el.innerText = icons[Math.floor(Math.random() * icons.length)];
-            
-            // Posições e tamanhos aleatórios
             el.style.left = (Math.random() * 94) + 'vw';
             const duracao = (2.2 + Math.random() * 2.5);
             el.style.animationDuration = duracao + 's';
             el.style.animationDelay = (Math.random() * 0.8) + 's';
             el.style.fontSize = (22 + Math.random() * 22) + 'px';
-            
             parentDoc.body.appendChild(el);
 
-            // Remove o elemento após a queda
             setTimeout(() => {
                 if (el && el.parentNode) {
                     el.parentNode.removeChild(el);
@@ -479,12 +473,11 @@ def main():
                     index=False
                 )
 
-               if sucesso_planilha:
-                    st.success("✅ Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
+                if sucesso_planilha:
+                    st.success("Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
                 else:
-                    st.success("✅ Atendimento registrado localmente com sucesso!")
+                    st.success("Atendimento registrado localmente com sucesso!")
 
-                # Dispara a chuva de café na tela inteira
                 animacao_graos_cafe()
 
                 st.session_state["visita_ativa"] = False
