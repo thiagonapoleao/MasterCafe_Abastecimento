@@ -90,7 +90,45 @@ GID_USUARIOS = "1642053143"
 GID_CLIENTES = "0"
 
 # -------------------------------------------------------------
-# 3. ANIMAÇÃO: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
+# 3. GESTÃO DE PERSISTÊNCIA (CONTRA REFRESH DE PÁGINA)
+# -------------------------------------------------------------
+PASTA_SESSAO = "sessoes_ativas"
+os.makedirs(PASTA_SESSAO, exist_ok=True)
+
+def caminho_arquivo_sessao(usuario):
+    user_sanitizado = "".join(c for c in str(usuario) if c.isalnum() or c in "_-")
+    return os.path.join(PASTA_SESSAO, f"sessao_{user_sanitizado}.json")
+
+def salvar_visita_em_andamento(usuario, dados):
+    """Grava o check-in ativo em disco para resistir a refresh do navegador."""
+    try:
+        with open(caminho_arquivo_sessao(usuario), "w", encoding="utf-8") as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def carregar_visita_em_andamento(usuario):
+    """Recupera o check-in se o usuário recarregar a tela."""
+    caminho = caminho_arquivo_sessao(usuario)
+    if os.path.exists(caminho):
+        try:
+            with open(caminho, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+def limpar_visita_em_andamento(usuario):
+    """Remove a sessão temporária ao concluir a visita."""
+    caminho = caminho_arquivo_sessao(usuario)
+    if os.path.exists(caminho):
+        try:
+            os.remove(caminho)
+        except Exception:
+            pass
+
+# -------------------------------------------------------------
+# 4. ANIMAÇÃO: CHUVA DE GRÃOS DE CAFÉ (TELA CHEIA)
 # -------------------------------------------------------------
 def animacao_graos_cafe():
     animacao_html = """
@@ -156,7 +194,7 @@ def animacao_graos_cafe():
     components.html(animacao_html, height=0, width=0)
 
 # -------------------------------------------------------------
-# 4. FUNÇÕES DE SUPORTE E LEITURA DA PLANILHA
+# 5. FUNÇÕES DE SUPORTE E LEITURA DA PLANILHA
 # -------------------------------------------------------------
 def normalizar_texto(texto):
     if not isinstance(texto, str):
@@ -310,7 +348,7 @@ def salvar_visita_na_planilha(dados):
         return False, f"Falha na comunicação: {str(e)}"
 
 # -------------------------------------------------------------
-# 5. TELA DE LOGIN
+# 6. TELA DE LOGIN
 # -------------------------------------------------------------
 def tela_login(df_usuarios):
     st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Portal de Abastecimento</p></div>', unsafe_allow_html=True)
@@ -336,31 +374,55 @@ def tela_login(df_usuarios):
                 st.session_state["autenticado"] = True
                 st.session_state["usuario_logado"] = usuario_digitado
                 st.session_state["nome_abastecedor"] = nome_colaborador
+                # Grava nos parâmetros de URL para persistir o login mesmo com Refresh
+                st.query_params["u"] = usuario_digitado
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
 
 # -------------------------------------------------------------
-# 6. FLUXO PRINCIPAL DO APLICATIVO
+# 7. FLUXO PRINCIPAL DO APLICATIVO
 # -------------------------------------------------------------
 def main():
     df_usuarios = carregar_usuarios()
 
+    # Recupera o login a partir da URL se a página foi recarregada (Refresh)
+    if not st.session_state.get("autenticado", False):
+        usuario_url = st.query_params.get("u", None)
+        if usuario_url and not df_usuarios.empty:
+            usuario_url = str(usuario_url).strip().lower()
+            usuario_valido = df_usuarios[df_usuarios["usuario"] == usuario_url]
+            if not usuario_valido.empty:
+                st.session_state["autenticado"] = True
+                st.session_state["usuario_logado"] = usuario_url
+                st.session_state["nome_abastecedor"] = usuario_valido.iloc[0]["nome"]
+
+    # Se ainda não estiver autenticado, exibe tela de login
     if not st.session_state.get("autenticado", False):
         tela_login(df_usuarios)
         return
 
+    usuario_atual = st.session_state.get("usuario_logado")
+
+    # Recupera visita aberta em andamento (se houve F5 ou recarregamento)
+    if "visita_ativa" not in st.session_state or not st.session_state["visita_ativa"]:
+        visita_recuperada = carregar_visita_em_andamento(usuario_atual)
+        if visita_recuperada:
+            st.session_state["visita_ativa"] = True
+            st.session_state["dados_visita"] = visita_recuperada
+        else:
+            st.session_state["visita_ativa"] = False
+            st.session_state["dados_visita"] = {}
+
     with st.sidebar:
         st.write(f"👤 **Abastecedor(a):**\n### {st.session_state.get('nome_abastecedor')}")
         if st.button("🚪 Sair do Sistema"):
+            limpar_visita_em_andamento(usuario_atual)
             st.session_state.clear()
+            st.query_params.clear()
             st.rerun()
 
     st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controle de Visitas e Abastecimento</p></div>', unsafe_allow_html=True)
-
-    if "visita_ativa" not in st.session_state:
-        st.session_state["visita_ativa"] = False
-        st.session_state["dados_visita"] = {}
 
     df_base = carregar_base_equipamentos()
 
@@ -426,9 +488,9 @@ def main():
                 lat = coords["latitude"] if coords else "GPS não detectado"
                 lon = coords["longitude"] if coords else "GPS não detectado"
 
-                st.session_state["visita_ativa"] = True
-                st.session_state["dados_visita"] = {
+                dados_checkin = {
                     "abastecedor": st.session_state["nome_abastecedor"],
+                    "usuario": usuario_atual,
                     "equipamento": dados_maquina["equipamento"],
                     "cliente": dados_maquina["cliente"],
                     "produto": dados_maquina["produto"],
@@ -436,6 +498,11 @@ def main():
                     "data_checkin": obter_data_hora_brasil(),
                     "geo_checkin": f"{lat}, {lon}"
                 }
+
+                # Salva o atendimento em andamento para não perder com F5 / Refresh
+                salvar_visita_em_andamento(usuario_atual, dados_checkin)
+                st.session_state["visita_ativa"] = True
+                st.session_state["dados_visita"] = dados_checkin
                 st.rerun()
 
     # ---------------------------------------------------------
@@ -446,11 +513,11 @@ def main():
 
         st.markdown(f"""
             <div class="status-box">
-                <b>Abastecedor:</b> {dados['abastecedor']}<br>
-                <b>Cliente:</b> {dados['cliente']}<br>
-                <b>Máquina:</b> {dados['produto']} (Nº {dados['equipamento']})<br>
-                <b>Endereço:</b> {dados['endereco']}<br>
-                <b>Check-in:</b> {dados['data_checkin']} | <b>GPS:</b> {dados['geo_checkin']}
+                <b>Abastecedor:</b> {dados.get('abastecedor')}<br>
+                <b>Cliente:</b> {dados.get('cliente')}<br>
+                <b>Máquina:</b> {dados.get('produto')} (Nº {dados.get('equipamento')})<br>
+                <b>Endereço:</b> {dados.get('endereco')}<br>
+                <b>Check-in:</b> {dados.get('data_checkin')} | <b>GPS:</b> {dados.get('geo_checkin')}
             </div>
         """, unsafe_allow_html=True)
 
@@ -481,7 +548,21 @@ def main():
         st.subheader("Finalizar Visita")
         loc_checkout = get_geolocation()
 
-        if st.button("🏁 Realizar Check-out e Concluir"):
+        col_finalizar, col_cancelar = st.columns([2, 1])
+
+        with col_finalizar:
+            btn_checkout = st.button("🏁 Realizar Check-out e Concluir")
+
+        with col_cancelar:
+            # Opção de segurança caso o operador queira cancelar o atendimento em aberto
+            with st.expander("⚠️ Cancelar Atendimento"):
+                if st.button("Descartar Check-in"):
+                    limpar_visita_em_andamento(usuario_atual)
+                    st.session_state["visita_ativa"] = False
+                    st.session_state["dados_visita"] = {}
+                    st.rerun()
+
+        if btn_checkout:
             tem_assinatura = False
             try:
                 if canvas_result is not None and canvas_result.json_data is not None:
@@ -521,7 +602,7 @@ def main():
                     sucesso, msg = salvar_visita_na_planilha(dados)
 
                 # Salva no backup local
-                dados_csv = {k: v for k, v in dados.items() if not k.endswith("_b64")}
+                dados_csv = {k: v for k, v in dados.items() if not k.endswith("_b64") and k != "usuario"}
                 arquivo_historico = "visitas_realizadas.csv"
                 df_reg = pd.DataFrame([dados_csv])
                 df_reg.to_csv(
@@ -530,6 +611,9 @@ def main():
                     header=not os.path.exists(arquivo_historico),
                     index=False
                 )
+
+                # Remove o arquivo temporário de persistência do atendimento
+                limpar_visita_em_andamento(usuario_atual)
 
                 if sucesso:
                     st.success("✅ Atendimento registrado e salvo na aba 'Visitas' da planilha Google!")
