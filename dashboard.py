@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import requests
 import json
+import os
 import plotly.express as px
 
 # -------------------------------------------------------------
@@ -48,14 +49,6 @@ st.markdown("""
             color: #94A3B8;
             font-weight: 500;
         }
-        .status-badge {
-            background-color: #1E293B;
-            border-left: 4px solid #0D6EFD;
-            padding: 10px 14px;
-            border-radius: 4px 8px 8px 4px;
-            margin: 8px 0;
-            color: #E2E8F0;
-        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -66,14 +59,15 @@ SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
 # -------------------------------------------------------------
-# 3. CARREGAMENTO DOS DADOS DE VISITAS
+# 3. CARREGAMENTO DOS DADOS COM PARÂMETRO ANTI-CACHE
 # -------------------------------------------------------------
-@st.cache_data(ttl=30)
-def carregar_dados_visitas():
-    """Carrega os dados da aba Visitas diretamente da planilha Google ou do backup local."""
+@st.cache_data(ttl=15)
+def carregar_dados_visitas(forcar_atualizacao=0):
+    """Carrega os dados da aba Visitas com proteção anti-cache."""
+    ts_nocache = int(datetime.now().timestamp())
     urls = [
-        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas",
-        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&sheet=Visitas"
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas&t={ts_nocache}",
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&sheet=Visitas&t={ts_nocache}"
     ]
     
     df = None
@@ -86,7 +80,6 @@ def carregar_dados_visitas():
         except Exception:
             continue
 
-    # Fallback para o arquivo local se a planilha online não responder
     if df is None or df.empty:
         if os.path.exists("visitas_realizadas.csv"):
             try:
@@ -99,13 +92,12 @@ def carregar_dados_visitas():
     if df.empty:
         return pd.DataFrame()
 
-    # Padroniza nomes de colunas
     col_map = {}
     for col in df.columns:
         c_clean = col.strip().lower()
-        if "data checkin" in c_clean or "checkin" in c_clean and "data" in c_clean:
+        if "data checkin" in c_clean or ("checkin" in c_clean and "data" in c_clean):
             col_map[col] = "Data Checkin"
-        elif "data checkout" in c_clean or "checkout" in c_clean and "data" in c_clean:
+        elif "data checkout" in c_clean or ("checkout" in c_clean and "data" in c_clean):
             col_map[col] = "Data Checkout"
         elif "abastecedor" in c_clean:
             col_map[col] = "Abastecedor"
@@ -133,8 +125,12 @@ def carregar_dados_visitas():
     df = df.rename(columns=col_map)
     return df
 
-def excluir_registro_planilha(data_checkin, abastecedor, equipamento):
-    """Envia requisição para exclusão de registro via Webhook Apps Script."""
+def excluir_registro_completo(data_checkin, abastecedor, equipamento):
+    """Exclui da planilha Google via Webhook e remove do backup local em CSV."""
+    sucesso_planilha = False
+    msg_retorno = ""
+
+    # 1. Envia comando de exclusão para o Google Apps Script
     try:
         payload = {
             "action": "delete",
@@ -143,10 +139,55 @@ def excluir_registro_planilha(data_checkin, abastecedor, equipamento):
             "equipamento": str(equipamento).strip()
         }
         headers = {"Content-Type": "text/plain;charset=utf-8"}
-        res = requests.post(WEBHOOK_URL, data=json.dumps(payload), headers=headers, timeout=20)
-        return res.status_code == 200
-    except Exception:
-        return False
+        res = requests.post(
+            WEBHOOK_URL,
+            data=json.dumps(payload),
+            headers=headers,
+            timeout=25,
+            allow_redirects=True
+        )
+
+        if res.status_code == 200:
+            try:
+                ret = res.json()
+                if ret.get("status") == "deleted":
+                    sucesso_planilha = True
+                    msg_retorno = "Linha excluída com sucesso na planilha Google!"
+                else:
+                    msg_retorno = ret.get("message", "Registro não encontrado na planilha.")
+            except Exception:
+                if "deleted" in res.text.lower() or "success" in res.text.lower():
+                    sucesso_planilha = True
+                    msg_retorno = "Linha excluída com sucesso!"
+                else:
+                    msg_retorno = f"Resposta do servidor: {res.text[:150]}"
+        else:
+            msg_retorno = f"Erro HTTP {res.status_code}: {res.text[:120]}"
+    except Exception as e:
+        msg_retorno = f"Falha de conexão com o Webhook: {str(e)}"
+
+    # 2. Remove também do arquivo local 'visitas_realizadas.csv' se existir
+    if os.path.exists("visitas_realizadas.csv"):
+        try:
+            df_local = pd.read_csv("visitas_realizadas.csv", dtype=str)
+            if not df_local.empty:
+                cond = True
+                if "data_checkin" in df_local.columns:
+                    cond = cond & (df_local["data_checkin"].astype(str).str.strip() != str(data_checkin).strip())
+                elif "Data Checkin" in df_local.columns:
+                    cond = cond & (df_local["Data Checkin"].astype(str).str.strip() != str(data_checkin).strip())
+
+                if "equipamento" in df_local.columns:
+                    cond = cond & (df_local["equipamento"].astype(str).str.strip() != str(equipamento).strip())
+                elif "Equipamento" in df_local.columns:
+                    cond = cond & (df_local["Equipamento"].astype(str).str.strip() != str(equipamento).strip())
+
+                df_local_novo = df_local[cond]
+                df_local_novo.to_csv("visitas_realizadas.csv", index=False)
+        except Exception:
+            pass
+
+    return sucesso_planilha, msg_retorno
 
 # -------------------------------------------------------------
 # 4. INTERFACE PRINCIPAL DO DASHBOARD
@@ -154,12 +195,16 @@ def excluir_registro_planilha(data_checkin, abastecedor, equipamento):
 def main():
     st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Painel de Monitoramento de Visitas e Manutenções</p></div>', unsafe_allow_html=True)
 
-    df_raw = carregar_dados_visitas()
+    if "refresh_counter" not in st.session_state:
+        st.session_state["refresh_counter"] = 0
+
+    df_raw = carregar_dados_visitas(forcar_atualizacao=st.session_state["refresh_counter"])
 
     if df_raw.empty or "Data Checkin" not in df_raw.columns:
         st.warning("⚠️ Nenhum registro de visita encontrado na planilha ou no histórico local.")
         if st.button("🔄 Atualizar Dados"):
             st.cache_data.clear()
+            st.session_state["refresh_counter"] += 1
             st.rerun()
         return
 
@@ -171,13 +216,13 @@ def main():
     with st.sidebar:
         st.header("🔍 Filtros de Consulta")
 
-        if st.button("🔄 Atualizar Painel"):
+        if st.button("🔄 Atualizar Painel", use_container_width=True):
             st.cache_data.clear()
+            st.session_state["refresh_counter"] += 1
             st.rerun()
 
         st.markdown("---")
 
-        # Configuração padrão do intervalo de datas (últimos 30 dias até hoje)
         hoje = date.today()
         inicio_padrao = hoje - timedelta(days=30)
         
@@ -187,9 +232,6 @@ def main():
             format="DD/MM/YYYY"
         )
 
-        # ---------------------------------------------------------
-        # FILTRO DE DATAS BLINDADO CONTRA ERRO DE COMPARAÇÃO
-        # ---------------------------------------------------------
         df["dt_checkin"] = pd.to_datetime(df["Data Checkin"], errors="coerce", dayfirst=True, format="mixed")
 
         d_inicio, d_fim = None, None
@@ -211,7 +253,7 @@ def main():
                 (df["dt_checkin"] <= t_fim)
             ]
 
-        # Filtro de Abastecedor / Técnico
+        # Filtro de Técnico
         lista_abast = ["Todos"] + sorted(df["Abastecedor"].dropna().unique().tolist()) if "Abastecedor" in df.columns else ["Todos"]
         sel_abast = st.selectbox("Técnico / Abastecedor:", lista_abast)
         if sel_abast != "Todos":
@@ -301,7 +343,7 @@ def main():
                 st.info("Sem dados de clientes no período.")
 
     # ---------------------------------------------------------
-    # 7. TABELA DETALHADA E EVIDÊNCIAS (FOTOS / ASSINATURA)
+    # 7. TABELA DETALHADA DOS ATENDIMENTOS
     # ---------------------------------------------------------
     st.subheader("📋 Detalhes dos Atendimentos Realizados")
 
@@ -313,22 +355,23 @@ def main():
     st.dataframe(df[colunas_visiveis], use_container_width=True)
 
     # ---------------------------------------------------------
-    # 8. INSPEÇÃO DE EVIDÊNCIAS DE UMA VISITA ESPECÍFICA
+    # 8. INSPEÇÃO E EXCLUSÃO DEFINITIVA DO REGISTRO
     # ---------------------------------------------------------
     st.markdown("---")
-    st.subheader("🔎 Inspecionar Fotos e Assinatura de um Atendimento")
+    st.subheader("🔎 Inspecionar Fotos, Assinatura e Exclusão")
 
     if not df.empty:
+        df_reset = df.reset_index(drop=True)
         opcoes_visitas = []
-        for idx, row in df.iterrows():
+        for idx, row in df_reset.iterrows():
             d_ch = row.get("Data Checkin", "")
             eq = row.get("Equipamento", "")
             cli = row.get("Cliente", "")
-            opcoes_visitas.append(f"{idx} - {d_ch} | Eq: {eq} | {cli}")
+            opcoes_visitas.append(f"{idx} | {d_ch} | Eq: {eq} | {cli}")
 
-        sel_idx_str = st.selectbox("Selecione o registro para visualizar as fotos:", opcoes_visitas)
-        idx_selecionado = int(sel_idx_str.split(" - ")[0])
-        registro = df.loc[idx_selecionado]
+        sel_item = st.selectbox("Selecione o atendimento para inspecionar:", opcoes_visitas)
+        idx_selecionado = int(sel_item.split(" | ")[0])
+        registro = df_reset.iloc[idx_selecionado]
 
         col_f1, col_f2, col_f3 = st.columns(3)
 
@@ -356,21 +399,27 @@ def main():
             else:
                 st.info("Sem assinatura registrada.")
 
-        # Opção de exclusão do registro inspecionado
-        with st.expander("🗑️ Excluir este registro da planilha"):
-            st.warning("Esta ação removerá a linha correspondente na aba 'Visitas' da planilha Google.")
-            if st.button("Confirmar Exclusão do Registro", key=f"del_{idx_selecionado}"):
-                sucesso = excluir_registro_planilha(
-                    registro.get("Data Checkin", ""),
-                    registro.get("Abastecedor", ""),
-                    registro.get("Equipamento", "")
-                )
+        # Bloco de exclusão com retorno detalhado
+        with st.expander("🗑️ Excluir este registro da planilha Google"):
+            st.warning(
+                f"Você está prestes a excluir permanentemente o atendimento de "
+                f"**{registro.get('Cliente')}** (Equipamento: **{registro.get('Equipamento')}** - Check-in: **{registro.get('Data Checkin')}**)."
+            )
+            if st.button("Confirmar Exclusão Definitiva", type="primary", key=f"btn_del_{idx_selecionado}"):
+                with st.spinner("Excluindo registro da planilha Google..."):
+                    sucesso, msg = excluir_registro_completo(
+                        registro.get("Data Checkin", ""),
+                        registro.get("Abastecedor", ""),
+                        registro.get("Equipamento", "")
+                    )
+
                 if sucesso:
-                    st.success("Registro removido com sucesso!")
+                    st.success("✅ Registro excluído com sucesso da planilha Google!")
                     st.cache_data.clear()
+                    st.session_state["refresh_counter"] += 1
                     st.rerun()
                 else:
-                    st.error("Não foi possível excluir o registro. Verifique a conexão com o Webhook.")
+                    st.error(f"❌ Não foi possível excluir: {msg}")
 
     # ---------------------------------------------------------
     # 9. MAPA DE LOCALIZAÇÃO DOS ATENDIMENTOS
