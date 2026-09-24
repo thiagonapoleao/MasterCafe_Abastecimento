@@ -65,13 +65,13 @@ st.markdown("""
 # 2. CONSTANTES E INTEGRAÇÃO GOOGLE SHEETS / DRIVE
 # -------------------------------------------------------------
 SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
-WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbz29P22qs_RBA6halAkFlnwh8phr76zVsq7giCAwXfPIPBafgkhLUiPSLkSbEwBukEJAg/exec"
+WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
 # -------------------------------------------------------------
-# 3. CARREGAMENTO DOS DADOS COM PARÂMETRO ANTI-CACHE
+# 3. CARREGAMENTO DOS DADOS COM PARÂMETRO ANTI-CACHE E ORDENAÇÃO
 # -------------------------------------------------------------
 def carregar_dados_visitas():
-    """Carrega os dados da aba Visitas da planilha Google sem cache estático."""
+    """Carrega os dados da aba Visitas da planilha Google garantindo ordenação cronológica."""
     ts_nocache = int(datetime.now().timestamp())
     urls = [
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas&nocache={ts_nocache}",
@@ -100,6 +100,7 @@ def carregar_dados_visitas():
     if df.empty:
         return pd.DataFrame()
 
+    # Mapeamento e padronização das colunas
     col_map = {}
     for col in df.columns:
         c_clean = col.strip().lower()
@@ -132,6 +133,11 @@ def carregar_dados_visitas():
 
     df = df.rename(columns=col_map)
     df["Linha_Planilha"] = [i + 2 for i in range(len(df))]
+
+    # Converte e ordena rigorosamente por Data Checkin (mais recentes no topo)
+    df["dt_ordem"] = pd.to_datetime(df["Data Checkin"], errors="coerce", dayfirst=True, format="mixed")
+    df = df.sort_values(by="dt_ordem", ascending=False).reset_index(drop=True)
+
     return df
 
 def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number=None):
@@ -144,8 +150,8 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
         "row_number": int(row_number) if row_number is not None else None
     }
 
-    # 1. Envio primário via POST
     sucesso = False
+    # 1. Tentativa via POST
     try:
         headers = {"Content-Type": "text/plain;charset=utf-8"}
         res = requests.post(
@@ -160,7 +166,7 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
     except Exception:
         sucesso = False
 
-    # 2. Fallback via GET se o POST tiver sofrido bloqueio de redirect
+    # 2. Fallback via GET
     if not sucesso:
         try:
             params = {
@@ -176,7 +182,7 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
         except Exception:
             pass
 
-    # 3. Exclusão também do backup local em CSV
+    # 3. Exclusão no arquivo local de backup
     if os.path.exists("visitas_realizadas.csv"):
         try:
             df_local = pd.read_csv("visitas_realizadas.csv", dtype=str)
@@ -201,12 +207,12 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
 # 4. NAVEGAÇÃO E INTERFACE PRINCIPAL
 # -------------------------------------------------------------
 def main():
-    # Mensagem flutuante persistente pós-exclusão
+    # Mensagem flutuante de sucesso pós-exclusão
     if st.session_state.get("sucesso_exclusao", False):
-        st.success("Registro excluído com sucesso!")
+        st.success("✅ Registro excluído com sucesso!")
         st.session_state["sucesso_exclusao"] = False
 
-    # Menu Lateral de Navegação
+    # Menu Lateral
     with st.sidebar:
         st.title("☕ Menu Master Café")
         pagina = st.radio(
@@ -315,10 +321,48 @@ def main():
                     fig_cli.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#F8FAFC", yaxis=dict(autorange="reversed"))
                     st.plotly_chart(fig_cli, use_container_width=True)
 
-        # Tabela Geral
-        st.subheader("📋 Detalhes dos Atendimentos Realizados")
+        # Tabela Geral (Ordenada por Data)
+        st.subheader("📋 Detalhes dos Atendimentos Realizados (Ordem Cronológica)")
         cols_tab = [c for c in ["Data Checkin", "Data Checkout", "Abastecedor", "Equipamento", "Cliente", "Produto", "Responsável"] if c in df.columns]
         st.dataframe(df[cols_tab], use_container_width=True)
+
+        # Inspeção de Fotos sem Pré-Seleção Automática
+        st.markdown("---")
+        st.subheader("🔎 Inspecionar Fotos de um Atendimento")
+        opcoes_insp = [f"{r.get('Data Checkin', '')} | Eq: {r.get('Equipamento', '')} | {r.get('Cliente', '')}" for _, r in df.iterrows()]
+        
+        sel_insp = st.selectbox(
+            "Selecione um atendimento para visualizar as fotos:",
+            options=opcoes_insp,
+            index=None,
+            placeholder="Clique aqui para selecionar uma visita..."
+        )
+
+        if sel_insp:
+            idx_insp = opcoes_insp.index(sel_insp)
+            reg_insp = df.iloc[idx_insp]
+            ci1, ci2, ci3 = st.columns(3)
+            with ci1:
+                st.caption("📷 **Foto Abastecida**")
+                u_ab = str(reg_insp.get("Foto Abastecida", "")).strip()
+                if u_ab.startswith("http"):
+                    st.image(u_ab, use_container_width=True)
+                else:
+                    st.info("Sem foto registrada.")
+            with ci2:
+                st.caption("✨ **Foto Limpa**")
+                u_li = str(reg_insp.get("Foto Limpa", "")).strip()
+                if u_li.startswith("http"):
+                    st.image(u_li, use_container_width=True)
+                else:
+                    st.info("Sem foto registrada.")
+            with ci3:
+                st.caption("✍️ **Assinatura**")
+                u_as = str(reg_insp.get("Assinatura", "")).strip()
+                if u_as.startswith("http"):
+                    st.image(u_as, use_container_width=True)
+                else:
+                    st.info("Sem assinatura registrada.")
 
     # =========================================================
     # PÁGINA 2: CENTRAL DE EXCLUSÃO DE REGISTROS
@@ -326,12 +370,12 @@ def main():
     elif pagina == "🗑️ Central de Exclusão de Registros":
         st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Central de Exclusão de Registros de Visita</p></div>', unsafe_allow_html=True)
 
-        st.info("ℹ️ Selecione o registro abaixo para auditar os detalhes, fotos e realizar a exclusão direta na planilha Google.")
+        st.info("ℹ️ Selecione um registro no campo abaixo para auditar os dados e fotos antes de confirmar a exclusão.")
 
         df_del = df_raw.copy()
 
         # Busca rápida
-        busca = st.text_input("🔍 Filtrar lista por Equipamento, Cliente ou Técnico:", placeholder="Ex: 6509, Thiago, Senac...").strip().lower()
+        busca = st.text_input("🔍 Filtrar registros por Equipamento, Cliente ou Técnico:", placeholder="Ex: 6509, Thiago, Senac...").strip().lower()
         if busca:
             df_del = df_del[
                 df_del["Equipamento"].astype(str).str.lower().str.contains(busca, na=False) |
@@ -340,81 +384,88 @@ def main():
                 df_del["Data Checkin"].astype(str).str.lower().str.contains(busca, na=False)
             ]
 
-        st.markdown(f"**Registros carregados:** `{len(df_del)}`")
+        st.markdown(f"**Registros encontrados (ordenados por data de registro):** `{len(df_del)}`")
 
         colunas_exibicao = [c for c in ["Linha_Planilha", "Data Checkin", "Equipamento", "Cliente", "Abastecedor", "Produto", "Responsável"] if c in df_del.columns]
         st.dataframe(df_del[colunas_exibicao], use_container_width=True)
 
         st.markdown("---")
-        st.subheader("Confirmar Exclusão de um Registro")
+        st.subheader("Excluir Registro da Planilha")
 
         if not df_del.empty:
             df_del_reset = df_del.reset_index(drop=True)
-            opcoes_del = []
-            for idx, r in df_del_reset.iterrows():
-                linha_plan = r.get("Linha_Planilha", idx + 2)
-                d_ch = r.get("Data Checkin", "")
-                eq = r.get("Equipamento", "")
-                cli = r.get("Cliente", "")
-                ab = r.get("Abastecedor", "")
-                opcoes_del.append(f"Linha {linha_plan} | Eq: {eq} | {d_ch} | {cli} ({ab})")
+            opcoes_del = [
+                f"{r.get('Data Checkin', '')} | Eq: {r.get('Equipamento', '')} | {r.get('Cliente', '')} ({r.get('Abastecedor', '')}) [Linha {r.get('Linha_Planilha')}]"
+                for _, r in df_del_reset.iterrows()
+            ]
 
-            item_selecionado = st.selectbox("Selecione o registro para exclusão:", opcoes_del)
-            idx_escolhido = opcoes_del.index(item_selecionado)
-            registro_alvo = df_del_reset.iloc[idx_escolhido]
+            # SEM PRÉ-SELEÇÃO (index=None)
+            item_selecionado = st.selectbox(
+                "Escolha o registro que deseja excluir:",
+                options=opcoes_del,
+                index=None,
+                placeholder="Selecione um registro da lista..."
+            )
 
-            # Inspecionar fotos
-            with st.expander("📷 Conferir Fotos e Assinatura deste Registro"):
-                col_f1, col_f2, col_f3 = st.columns(3)
-                with col_f1:
-                    st.caption("📷 **Foto Abastecida**")
-                    u_ab = str(registro_alvo.get("Foto Abastecida", "")).strip()
-                    if u_ab.startswith("http"):
-                        st.image(u_ab, use_container_width=True)
+            if item_selecionado is not None:
+                idx_escolhido = opcoes_del.index(item_selecionado)
+                registro_alvo = df_del_reset.iloc[idx_escolhido]
+
+                # Inspecionar fotos do registro selecionado
+                with st.expander("📷 Conferir Fotos e Assinatura deste Registro", expanded=True):
+                    col_f1, col_f2, col_f3 = st.columns(3)
+                    with col_f1:
+                        st.caption("📷 **Foto Abastecida**")
+                        u_ab = str(registro_alvo.get("Foto Abastecida", "")).strip()
+                        if u_ab.startswith("http"):
+                            st.image(u_ab, use_container_width=True)
+                        else:
+                            st.write("Sem foto.")
+                    with col_f2:
+                        st.caption("✨ **Foto Limpa**")
+                        u_li = str(registro_alvo.get("Foto Limpa", "")).strip()
+                        if u_li.startswith("http"):
+                            st.image(u_li, use_container_width=True)
+                        else:
+                            st.write("Sem foto.")
+                    with col_f3:
+                        st.caption("✍️ **Assinatura**")
+                        u_as = str(registro_alvo.get("Assinatura", "")).strip()
+                        if u_as.startswith("http"):
+                            st.image(u_as, use_container_width=True)
+                        else:
+                            st.write("Sem assinatura.")
+
+                st.markdown(f"""
+                    <div class="danger-box">
+                        <b>Confirmação de Exclusão:</b><br>
+                        • <b>Data Check-in:</b> {registro_alvo.get('Data Checkin')}<br>
+                        • <b>Equipamento:</b> {registro_alvo.get('Equipamento')}<br>
+                        • <b>Cliente:</b> {registro_alvo.get('Cliente')}<br>
+                        • <b>Linha na Planilha:</b> {registro_alvo.get('Linha_Planilha')}
+                    </div>
+                """, unsafe_allow_html=True)
+
+                if st.button("🗑️ Confirmar Exclusão Definitiva", type="primary", use_container_width=True):
+                    with st.spinner("Excluindo linha da planilha..."):
+                        sucesso = excluir_registro_completo(
+                            data_checkin=registro_alvo.get("Data Checkin", ""),
+                            abastecedor=registro_alvo.get("Abastecedor", ""),
+                            equipamento=registro_alvo.get("Equipamento", ""),
+                            row_number=registro_alvo.get("Linha_Planilha")
+                        )
+
+                    if sucesso:
+                        st.session_state["sucesso_exclusao"] = True
+                        st.cache_data.clear()
+                        time.sleep(0.5)
+                        st.rerun()
                     else:
-                        st.write("Sem imagem.")
-                with col_f2:
-                    st.caption("✨ **Foto Limpa**")
-                    u_li = str(registro_alvo.get("Foto Limpa", "")).strip()
-                    if u_li.startswith("http"):
-                        st.image(u_li, use_container_width=True)
-                    else:
-                        st.write("Sem imagem.")
-                with col_f3:
-                    st.caption("✍️ **Assinatura**")
-                    u_as = str(registro_alvo.get("Assinatura", "")).strip()
-                    if u_as.startswith("http"):
-                        st.image(u_as, use_container_width=True)
-                    else:
-                        st.write("Sem imagem.")
-
-            st.markdown(f"""
-                <div class="danger-box">
-                    <b>Confirmação de Exclusão Permanente:</b><br>
-                    • <b>Linha da Planilha:</b> {registro_alvo.get('Linha_Planilha')}<br>
-                    • <b>Cliente:</b> {registro_alvo.get('Cliente')}<br>
-                    • <b>Equipamento:</b> {registro_alvo.get('Equipamento')} | <b>Check-in:</b> {registro_alvo.get('Data Checkin')}
-                </div>
-            """, unsafe_allow_html=True)
-
-            if st.button("🗑️ Confirmar Exclusão Definitiva", type="primary", use_container_width=True):
-                with st.spinner("Excluindo linha da planilha..."):
-                    sucesso = excluir_registro_completo(
-                        data_checkin=registro_alvo.get("Data Checkin", ""),
-                        abastecedor=registro_alvo.get("Abastecedor", ""),
-                        equipamento=registro_alvo.get("Equipamento", ""),
-                        row_number=registro_alvo.get("Linha_Planilha")
-                    )
-
-                if sucesso:
-                    st.session_state["sucesso_exclusao"] = True
-                    st.cache_data.clear()
-                    time.sleep(1.0)
-                    st.rerun()
-                else:
-                    st.error("Não foi possível excluir o registro. Verifique a implantação do Apps Script.")
+                        st.error("❌ Não foi possível excluir o registro. Verifique a conexão com o Webhook.")
+            else:
+                st.caption("👈 Selecione um registro no campo acima para habilitar a confirmação de exclusão.")
         else:
-            st.warning("Nenhum registro encontrado com o filtro aplicado.")
+            st.warning("Nenhum registro encontrado com o termo pesquisado.")
 
 if __name__ == "__main__":
     main()
