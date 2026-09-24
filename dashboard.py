@@ -155,16 +155,13 @@ def carregar_dados_visitas():
     df = df.rename(columns=col_map)
     df["Linha_Planilha"] = [i + 2 for i in range(len(df))]
 
-    # Converte data para ordenação e extrai dados de Mês e Dia
     df["dt_ordem"] = pd.to_datetime(df["Data Checkin"], errors="coerce", dayfirst=True, format="mixed")
     df = df.sort_values(by="dt_ordem", ascending=False).reset_index(drop=True)
 
-    # Cria campo Tempo de Visita
     df["Tempo de Visita"] = df.apply(
         lambda r: formatar_duracao(r.get("Data Checkin"), r.get("Data Checkout")), axis=1
     )
 
-    # Extrai Mês e Data pura para filtros dinâmicos
     meses_pt = {
         1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
         7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
@@ -368,7 +365,6 @@ def main():
             reg_insp = df.iloc[idx_insp]
             nome_abast_inspecionado = reg_insp.get('Abastecedor', 'Não informado')
 
-            # Título dinâmico
             st.subheader(f"🔎 Inspeção de um Atendimento da Abastecedora ({nome_abast_inspecionado})")
 
             st.markdown(f"""
@@ -404,101 +400,133 @@ def main():
                     st.info("Sem assinatura registrada.")
 
     # =========================================================
-    # PÁGINA 2: VISITAS POR ABASTECEDORA COM FILTROS E MAPA
+    # PÁGINA 2: VISITAS POR ABASTECEDORA (FILTRO ÚNICO DINÂMICO)
     # =========================================================
     elif pagina == "👤 Visitas por Abastecedora":
         st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controle Individual por Abastecedora com Mapa e Tempo</p></div>', unsafe_allow_html=True)
 
-        lista_abastecedoras = sorted([x for x in df_raw["Abastecedor"].dropna().unique().tolist() if str(x).strip()])
+        hoje_atual = date.today()
+        meses_lista_nome = [
+            "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+        ]
+        mes_atual_nome = meses_lista_nome[hoje_atual.month - 1]
 
-        if not lista_abastecedoras:
-            st.warning("Nenhum abastecedor registrado na base.")
-            return
+        # Lista de Abastecedores disponíveis
+        lista_abastecedoras = ["Todos"] + sorted([x for x in df_raw["Abastecedor"].dropna().unique().tolist() if str(x).strip()])
 
-        # Abas dinâmicas por abastecedor
-        tabs_abast = st.tabs([f"👤 {nome}" for nome in lista_abastecedoras])
+        # --- BARRA DE FILTROS SUPERIOR ---
+        st.markdown("### 🔍 Filtros de Consulta Dinâmica")
+        col_f1, col_f2, col_f3 = st.columns(3)
 
-        for idx, tab_atual in enumerate(tabs_abast):
-            nome_abastecedora_tab = lista_abastecedoras[idx]
-            with tab_atual:
-                df_op = df_raw[df_raw["Abastecedor"] == nome_abastecedora_tab].copy()
+        with col_f1:
+            sel_abast = st.selectbox(
+                "👤 Escolha o(a) Abastecedor(a):",
+                options=lista_abastecedoras,
+                index=0
+            )
 
-                # Filtros Dinâmicos de Mês e Data específica
-                col_f_m, col_f_d = st.columns([1, 1.5])
-                with col_f_m:
-                    meses_disponiveis = ["Todos"] + [m for m in ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"] if m in df_op["Mês"].values]
-                    mes_sel = st.selectbox(f"📅 Filtrar Mês ({nome_abastecedora_tab}):", meses_disponiveis, key=f"mes_{idx}")
+        with col_f2:
+            opcoes_meses = ["Todos"] + meses_lista_nome
+            # Mês atual pré-selecionado por padrão
+            idx_mes_padrao = opcoes_meses.index(mes_atual_nome) if mes_atual_nome in opcoes_meses else 0
+            sel_mes = st.selectbox(
+                "📅 Escolha o Mês:",
+                options=opcoes_meses,
+                index=idx_mes_padrao
+            )
+
+        with col_f3:
+            # Data atual pré-selecionada por padrão
+            sel_data = st.date_input(
+                "📆 Escolha a Data Específica:",
+                value=hoje_atual,
+                format="DD/MM/YYYY"
+            )
+
+        # Opção rápida para visualizar o mês completo
+        ver_mes_todo = st.checkbox("Exibir todos os dias do mês selecionado (ignorar filtro de data única)", value=False)
+
+        # --- APLICAÇÃO DOS FILTROS ---
+        df_filtrado = df_raw.copy()
+
+        if sel_abast != "Todos":
+            df_filtrado = df_filtrado[df_filtrado["Abastecedor"] == sel_abast]
+
+        if sel_mes != "Todos":
+            df_filtrado = df_filtrado[df_filtrado["Mês"] == sel_mes]
+
+        if not ver_mes_todo and sel_data is not None:
+            df_filtrado = df_filtrado[df_filtrado["Data_Dia"] == sel_data]
+
+        st.markdown("---")
+
+        # --- CARDS DE MÉTRICAS DO FILTRO ---
+        total_atendimentos = len(df_filtrado)
+        total_clientes = df_filtrado["Cliente"].nunique() if "Cliente" in df_filtrado.columns else 0
+        total_equipamentos = df_filtrado["Equipamento"].nunique() if "Equipamento" in df_filtrado.columns else 0
+
+        km1, km2, km3 = st.columns(3)
+        with km1:
+            st.metric("Total de Atendimentos", total_atendimentos)
+        with km2:
+            st.metric("Clientes Atendidos", total_clientes)
+        with km3:
+            st.metric("Máquinas Atendidas", total_equipamentos)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # --- TABELA DETALHADA COM TEMPO DE VISITA ---
+        titulo_operador = f"de **{sel_abast}**" if sel_abast != "Todos" else "de **Todos os Abastecedores**"
+        st.markdown(f"#### 📋 Relatório Detalhado de Atendimentos {titulo_operador}")
+
+        if not df_filtrado.empty:
+            cols_detalhe = [
+                c for c in [
+                    "Data Checkin", "Data Checkout", "Tempo de Visita", "Abastecedor",
+                    "Equipamento", "Cliente", "Produto", "Endereço", "Responsável",
+                    "GPS Checkin", "GPS Checkout"
+                ] if c in df_filtrado.columns
+            ]
+            st.dataframe(df_filtrado[cols_detalhe], use_container_width=True, hide_index=True)
+
+            # --- MAPA DE GEOLOCALIZAÇÃO ---
+            st.markdown(f"#### 📍 Mapa de Roteiro e Locais Atendidos {titulo_operador}")
+            pontos_mapa = []
+            for _, row_g in df_filtrado.iterrows():
+                gps_in = str(row_g.get("GPS Checkin", "")).strip()
+                if "," in gps_in and "não" not in gps_in.lower():
+                    try:
+                        pt = gps_in.split(",")
+                        pontos_mapa.append({
+                            "latitude": float(pt[0].strip()),
+                            "longitude": float(pt[1].strip()),
+                            "tipo": "Check-in",
+                            "cliente": row_g.get("Cliente", "")
+                        })
+                    except Exception:
+                        pass
                 
-                with col_f_d:
-                    data_opcional = st.date_input(
-                        f"📆 Filtrar Data Específica ({nome_abastecedora_tab}):",
-                        value=None,
-                        format="DD/MM/YYYY",
-                        key=f"data_{idx}"
-                    )
+                gps_out = str(row_g.get("GPS Checkout", "")).strip()
+                if "," in gps_out and "não" not in gps_out.lower():
+                    try:
+                        pt2 = gps_out.split(",")
+                        pontos_mapa.append({
+                            "latitude": float(pt2[0].strip()),
+                            "longitude": float(pt2[1].strip()),
+                            "tipo": "Check-out",
+                            "cliente": row_g.get("Cliente", "")
+                        })
+                    except Exception:
+                        pass
 
-                # Aplicação dos filtros
-                if mes_sel != "Todos":
-                    df_op = df_op[df_op["Mês"] == mes_sel]
-                if data_opcional is not None:
-                    df_op = df_op[df_op["Data_Dia"] == data_opcional]
-
-                # Métricas Rápidas do Abastecedor
-                c_m1, c_m2, c_m3 = st.columns(3)
-                with c_m1:
-                    st.metric("Total de Atendimentos", len(df_op))
-                with c_m2:
-                    st.metric("Clientes Únicos", df_op["Cliente"].nunique() if "Cliente" in df_op.columns else 0)
-                with c_m3:
-                    st.metric("Máquinas Atendidas", df_op["Equipamento"].nunique() if "Equipamento" in df_op.columns else 0)
-
-                # Tabela Detalhada com Tempo de Visita
-                st.markdown(f"#### 📋 Relatório Detalhado de Atendimentos de **{nome_abastecedora_tab}**")
-                cols_detalhe = [
-                    c for c in [
-                        "Data Checkin", "Data Checkout", "Tempo de Visita", "Equipamento", 
-                        "Cliente", "Produto", "Endereço", "Responsável", "GPS Checkin", "GPS Checkout"
-                    ] if c in df_op.columns
-                ]
-                st.dataframe(df_op[cols_detalhe], use_container_width=True, hide_index=True)
-
-                # Mapa de Geolocalização do Abastecedor
-                st.markdown(f"#### 📍 Mapa de Roteiro e Locais Atendidos por **{nome_abastecedora_tab}**")
-                pontos_mapa = []
-                for _, row_g in df_op.iterrows():
-                    # Coleta coordenadas de checkin
-                    gps_in = str(row_g.get("GPS Checkin", "")).strip()
-                    if "," in gps_in and "não" not in gps_in.lower():
-                        try:
-                            pt = gps_in.split(",")
-                            pontos_mapa.append({
-                                "latitude": float(pt[0].strip()),
-                                "longitude": float(pt[1].strip()),
-                                "tipo": "Check-in",
-                                "cliente": row_g.get("Cliente", "")
-                            })
-                        except Exception:
-                            pass
-                    
-                    # Coleta coordenadas de checkout
-                    gps_out = str(row_g.get("GPS Checkout", "")).strip()
-                    if "," in gps_out and "não" not in gps_out.lower():
-                        try:
-                            pt2 = gps_out.split(",")
-                            pontos_mapa.append({
-                                "latitude": float(pt2[0].strip()),
-                                "longitude": float(pt2[1].strip()),
-                                "tipo": "Check-out",
-                                "cliente": row_g.get("Cliente", "")
-                            })
-                        except Exception:
-                            pass
-
-                if pontos_mapa:
-                    df_mapa_geo = pd.DataFrame(pontos_mapa)
-                    st.map(df_mapa_geo, latitude="latitude", longitude="longitude", size=25, color="#0D6EFD")
-                else:
-                    st.caption("ℹ️ Nenhuma coordenada GPS válida registrada para os filtros selecionados.")
+            if pontos_mapa:
+                df_mapa_geo = pd.DataFrame(pontos_mapa)
+                st.map(df_mapa_geo, latitude="latitude", longitude="longitude", size=25, color="#0D6EFD")
+            else:
+                st.caption("ℹ️ Nenhuma coordenada GPS válida registrada para os filtros selecionados.")
+        else:
+            st.warning("Nenhum atendimento localizado com a combinação de filtros selecionada.")
 
     # =========================================================
     # PÁGINA 3: CENTRAL DE EXCLUSÃO DE REGISTROS
@@ -534,7 +562,6 @@ def main():
                 for _, r in df_del_reset.iterrows()
             ]
 
-            # SEM PRÉ-SELEÇÃO (index=None)
             item_selecionado = st.selectbox(
                 "Escolha o registro que deseja excluir:",
                 options=opcoes_del,
