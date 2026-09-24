@@ -68,8 +68,30 @@ SPREADSHEET_ID = "1hGmvoW7c5u5IFESk_GU0nioTiy5sCUvYdqpVycWcVbU"
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8zazwK4SXf-RvKRMMkQhqJHbmyg4mHBT7AVRLubKOWzbQ/exec"
 
 # -------------------------------------------------------------
-# 3. CARREGAMENTO DOS DADOS COM PARÂMETRO ANTI-CACHE E ORDENAÇÃO
+# 3. FUNÇÕES AUXILIARES DE CÁLCULO E DADOS
 # -------------------------------------------------------------
+def formatar_duracao(inicio_str, fim_str):
+    """Calcula o tempo de permanência da visita."""
+    try:
+        if not inicio_str or not fim_str:
+            return "Em andamento"
+        dt_in = pd.to_datetime(inicio_str, errors="coerce", dayfirst=True, format="mixed")
+        dt_out = pd.to_datetime(fim_str, errors="coerce", dayfirst=True, format="mixed")
+        if pd.isna(dt_in) or pd.isna(dt_out):
+            return "Não registrado"
+        delta = dt_out - dt_in
+        total_segundos = int(delta.total_seconds())
+        if total_segundos < 0:
+            return "Inválido"
+        horas = total_segundos // 3600
+        minutos = (total_segundos % 3600) // 60
+        segundos = total_segundos % 60
+        if horas > 0:
+            return f"{horas}h {minutos}m {segundos}s"
+        return f"{minutos}m {segundos}s"
+    except Exception:
+        return "Não registrado"
+
 def carregar_dados_visitas():
     """Carrega os dados da aba Visitas da planilha Google garantindo ordenação cronológica."""
     ts_nocache = int(datetime.now().timestamp())
@@ -100,7 +122,6 @@ def carregar_dados_visitas():
     if df.empty:
         return pd.DataFrame()
 
-    # Mapeamento e padronização das colunas
     col_map = {}
     for col in df.columns:
         c_clean = col.strip().lower()
@@ -134,9 +155,22 @@ def carregar_dados_visitas():
     df = df.rename(columns=col_map)
     df["Linha_Planilha"] = [i + 2 for i in range(len(df))]
 
-    # Converte e ordena rigorosamente por Data Checkin (mais recentes no topo)
+    # Converte data para ordenação e extrai dados de Mês e Dia
     df["dt_ordem"] = pd.to_datetime(df["Data Checkin"], errors="coerce", dayfirst=True, format="mixed")
     df = df.sort_values(by="dt_ordem", ascending=False).reset_index(drop=True)
+
+    # Cria campo Tempo de Visita
+    df["Tempo de Visita"] = df.apply(
+        lambda r: formatar_duracao(r.get("Data Checkin"), r.get("Data Checkout")), axis=1
+    )
+
+    # Extrai Mês e Data pura para filtros dinâmicos
+    meses_pt = {
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
+        7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+    }
+    df["Mês"] = df["dt_ordem"].apply(lambda d: meses_pt.get(d.month, "Outro") if pd.notna(d) else "Não informado")
+    df["Data_Dia"] = df["dt_ordem"].apply(lambda d: d.date() if pd.notna(d) else None)
 
     return df
 
@@ -151,7 +185,6 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
     }
 
     sucesso = False
-    # 1. Tentativa via POST
     try:
         headers = {"Content-Type": "text/plain;charset=utf-8"}
         res = requests.post(
@@ -166,7 +199,6 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
     except Exception:
         sucesso = False
 
-    # 2. Fallback via GET
     if not sucesso:
         try:
             params = {
@@ -182,7 +214,6 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
         except Exception:
             pass
 
-    # 3. Exclusão no arquivo local de backup
     if os.path.exists("visitas_realizadas.csv"):
         try:
             df_local = pd.read_csv("visitas_realizadas.csv", dtype=str)
@@ -204,20 +235,22 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
     return sucesso
 
 # -------------------------------------------------------------
-# 4. NAVEGAÇÃO E INTERFACE PRINCIPAL
+# 4. APLICAÇÃO PRINCIPAL
 # -------------------------------------------------------------
 def main():
-    # Mensagem flutuante de sucesso pós-exclusão
     if st.session_state.get("sucesso_exclusao", False):
         st.success("✅ Registro excluído com sucesso!")
         st.session_state["sucesso_exclusao"] = False
 
-    # Menu Lateral
     with st.sidebar:
         st.title("☕ Menu Master Café")
         pagina = st.radio(
             "Selecione o Módulo:",
-            ["📊 Dashboard Geral", "🗑️ Central de Exclusão de Registros"],
+            [
+                "📊 Dashboard Geral", 
+                "👤 Visitas por Abastecedora", 
+                "🗑️ Central de Exclusão de Registros"
+            ],
             index=0
         )
         st.markdown("---")
@@ -239,7 +272,7 @@ def main():
     # PÁGINA 1: DASHBOARD GERAL
     # =========================================================
     if pagina == "📊 Dashboard Geral":
-        st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Painel de Monitoramento de Visitas e Manutenções</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Painel de Monitoramento Geral de Visitas</p></div>', unsafe_allow_html=True)
 
         df = df_raw.copy()
 
@@ -249,12 +282,10 @@ def main():
             inicio_padrao = hoje - timedelta(days=30)
             
             filtro_data = st.date_input(
-                "Período das Visitas:",
+                "Período Geral:",
                 value=(inicio_padrao, hoje),
                 format="DD/MM/YYYY"
             )
-
-            df["dt_checkin"] = pd.to_datetime(df["Data Checkin"], errors="coerce", dayfirst=True, format="mixed")
 
             d_inicio, d_fim = None, None
             if isinstance(filtro_data, (list, tuple)):
@@ -268,18 +299,12 @@ def main():
             if d_inicio and d_fim:
                 t_inicio = pd.Timestamp(d_inicio).replace(hour=0, minute=0, second=0, microsecond=0)
                 t_fim = pd.Timestamp(d_fim).replace(hour=23, minute=59, second=59, microsecond=999999)
-                df = df[df["dt_checkin"].notna() & (df["dt_checkin"] >= t_inicio) & (df["dt_checkin"] <= t_fim)]
+                df = df[df["dt_ordem"].notna() & (df["dt_ordem"] >= t_inicio) & (df["dt_ordem"] <= t_fim)]
 
-            lista_abast = ["Todos"] + sorted(df["Abastecedor"].dropna().unique().tolist()) if "Abastecedor" in df.columns else ["Todos"]
+            lista_abast = ["Todos"] + sorted([x for x in df["Abastecedor"].dropna().unique().tolist() if str(x).strip()])
             sel_abast = st.selectbox("Técnico / Abastecedor:", lista_abast)
             if sel_abast != "Todos":
                 df = df[df["Abastecedor"] == sel_abast]
-
-            if "Equipamento" in df.columns:
-                lista_equip = ["Todos"] + sorted(df["Equipamento"].dropna().unique().tolist())
-                sel_equip = st.selectbox("Número do Equipamento:", lista_equip)
-                if sel_equip != "Todos":
-                    df = df[df["Equipamento"] == sel_equip]
 
             st.caption(f"Registros exibidos: **{len(df)}**")
 
@@ -297,7 +322,7 @@ def main():
         with k3:
             st.markdown(f'<div class="metric-card"><h3>{clientes_atendidos}</h3><p>Clientes Distintos</p></div>', unsafe_allow_html=True)
         with k4:
-            st.markdown(f'<div class="metric-card"><h3>{tecnicos_ativos}</h3><p>Técnicos em Ação</p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="metric-card"><h3>{tecnicos_ativos}</h3><p>Abastecedores Ativos</p></div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -305,34 +330,34 @@ def main():
         if not df.empty:
             cg1, cg2 = st.columns(2)
             with cg1:
-                st.subheader("📊 Atendimentos por Técnico")
-                if "Abastecedor" in df.columns and not df["Abastecedor"].dropna().empty:
-                    df_tec = df["Abastecedor"].value_counts().reset_index()
-                    df_tec.columns = ["Técnico", "Atendimentos"]
-                    fig_tec = px.bar(df_tec, x="Atendimentos", y="Técnico", orientation="h", color="Atendimentos", color_continuous_scale="Blues", text="Atendimentos")
-                    fig_tec.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#F8FAFC", yaxis=dict(autorange="reversed"))
-                    st.plotly_chart(fig_tec, use_container_width=True)
+                st.subheader("📊 Atendimentos por Abastecedora")
+                df_tec = df["Abastecedor"].value_counts().reset_index()
+                df_tec.columns = ["Abastecedora", "Atendimentos"]
+                fig_tec = px.bar(df_tec, x="Atendimentos", y="Abastecedora", orientation="h", color="Atendimentos", color_continuous_scale="Blues", text="Atendimentos")
+                fig_tec.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#F8FAFC", yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig_tec, use_container_width=True)
             with cg2:
                 st.subheader("☕ Top 10 Clientes Atendidos")
-                if "Cliente" in df.columns and not df["Cliente"].dropna().empty:
-                    df_cli = df["Cliente"].value_counts().head(10).reset_index()
-                    df_cli.columns = ["Cliente", "Visitas"]
-                    fig_cli = px.bar(df_cli, x="Visitas", y="Cliente", orientation="h", color="Visitas", color_continuous_scale="Teal", text="Visitas")
-                    fig_cli.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#F8FAFC", yaxis=dict(autorange="reversed"))
-                    st.plotly_chart(fig_cli, use_container_width=True)
+                df_cli = df["Cliente"].value_counts().head(10).reset_index()
+                df_cli.columns = ["Cliente", "Visitas"]
+                fig_cli = px.bar(df_cli, x="Visitas", y="Cliente", orientation="h", color="Visitas", color_continuous_scale="Teal", text="Visitas")
+                fig_cli.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="#F8FAFC", yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig_cli, use_container_width=True)
 
-        # Tabela Geral (Ordenada por Data)
-        st.subheader("📋 Detalhes dos Atendimentos Realizados (Ordem Cronológica)")
-        cols_tab = [c for c in ["Data Checkin", "Data Checkout", "Abastecedor", "Equipamento", "Cliente", "Produto", "Responsável"] if c in df.columns]
-        st.dataframe(df[cols_tab], use_container_width=True)
+        # Tabela Geral com Tempo de Visita
+        st.subheader("📋 Tabela Geral de Atendimentos")
+        cols_tab = [c for c in ["Data Checkin", "Data Checkout", "Tempo de Visita", "Abastecedor", "Equipamento", "Cliente", "Produto", "Responsável"] if c in df.columns]
+        st.dataframe(df[cols_tab], use_container_width=True, hide_index=True)
 
-        # Inspeção de Fotos sem Pré-Seleção Automática
+        # SEÇÃO DE INSPEÇÃO COM NOME DINÂMICO
         st.markdown("---")
-        st.subheader("🔎 Inspecionar Fotos de um Atendimento")
-        opcoes_insp = [f"{r.get('Data Checkin', '')} | Eq: {r.get('Equipamento', '')} | {r.get('Cliente', '')}" for _, r in df.iterrows()]
+        opcoes_insp = [
+            f"{r.get('Data Checkin', '')} | Eq: {r.get('Equipamento', '')} | {r.get('Cliente', '')} | Operador: {r.get('Abastecedor', 'Não informado')}"
+            for _, r in df.iterrows()
+        ]
         
         sel_insp = st.selectbox(
-            "Selecione um atendimento para visualizar as fotos:",
+            "Selecione um atendimento para inspecionar:",
             options=opcoes_insp,
             index=None,
             placeholder="Clique aqui para selecionar uma visita..."
@@ -341,6 +366,20 @@ def main():
         if sel_insp:
             idx_insp = opcoes_insp.index(sel_insp)
             reg_insp = df.iloc[idx_insp]
+            nome_abast_inspecionado = reg_insp.get('Abastecedor', 'Não informado')
+
+            # Título dinâmico
+            st.subheader(f"🔎 Inspeção de um Atendimento da Abastecedora ({nome_abast_inspecionado})")
+
+            st.markdown(f"""
+                <div class="metric-card" style="text-align: left; margin-bottom: 15px;">
+                    <b>📍 Cliente:</b> {reg_insp.get('Cliente')}<br>
+                    <b>☕ Equipamento:</b> {reg_insp.get('Produto')} (Nº {reg_insp.get('Equipamento')})<br>
+                    <b>⏱️ Horário:</b> {reg_insp.get('Data Checkin')} até {reg_insp.get('Data Checkout')} (<b>Duração:</b> {reg_insp.get('Tempo de Visita')})<br>
+                    <b>👤 Responsável no Local:</b> {reg_insp.get('Responsável')}
+                </div>
+            """, unsafe_allow_html=True)
+
             ci1, ci2, ci3 = st.columns(3)
             with ci1:
                 st.caption("📷 **Foto Abastecida**")
@@ -365,7 +404,104 @@ def main():
                     st.info("Sem assinatura registrada.")
 
     # =========================================================
-    # PÁGINA 2: CENTRAL DE EXCLUSÃO DE REGISTROS
+    # PÁGINA 2: VISITAS POR ABASTECEDORA COM FILTROS E MAPA
+    # =========================================================
+    elif pagina == "👤 Visitas por Abastecedora":
+        st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controle Individual por Abastecedora com Mapa e Tempo</p></div>', unsafe_allow_html=True)
+
+        lista_abastecedoras = sorted([x for x in df_raw["Abastecedor"].dropna().unique().tolist() if str(x).strip()])
+
+        if not lista_abastecedoras:
+            st.warning("Nenhum abastecedor registrado na base.")
+            return
+
+        # Abas dinâmicas por abastecedor
+        tabs_abast = st.tabs([f"👤 {nome}" for nome in lista_abastecedoras])
+
+        for idx, tab_atual in enumerate(tabs_abast):
+            nome_abastecedora_tab = lista_abastecedoras[idx]
+            with tab_atual:
+                df_op = df_raw[df_raw["Abastecedor"] == nome_abastecedora_tab].copy()
+
+                # Filtros Dinâmicos de Mês e Data específica
+                col_f_m, col_f_d = st.columns([1, 1.5])
+                with col_f_m:
+                    meses_disponiveis = ["Todos"] + [m for m in ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"] if m in df_op["Mês"].values]
+                    mes_sel = st.selectbox(f"📅 Filtrar Mês ({nome_abastecedora_tab}):", meses_disponiveis, key=f"mes_{idx}")
+                
+                with col_f_d:
+                    data_opcional = st.date_input(
+                        f"📆 Filtrar Data Específica ({nome_abastecedora_tab}):",
+                        value=None,
+                        format="DD/MM/YYYY",
+                        key=f"data_{idx}"
+                    )
+
+                # Aplicação dos filtros
+                if mes_sel != "Todos":
+                    df_op = df_op[df_op["Mês"] == mes_sel]
+                if data_opcional is not None:
+                    df_op = df_op[df_op["Data_Dia"] == data_opcional]
+
+                # Métricas Rápidas do Abastecedor
+                c_m1, c_m2, c_m3 = st.columns(3)
+                with c_m1:
+                    st.metric("Total de Atendimentos", len(df_op))
+                with c_m2:
+                    st.metric("Clientes Únicos", df_op["Cliente"].nunique() if "Cliente" in df_op.columns else 0)
+                with c_m3:
+                    st.metric("Máquinas Atendidas", df_op["Equipamento"].nunique() if "Equipamento" in df_op.columns else 0)
+
+                # Tabela Detalhada com Tempo de Visita
+                st.markdown(f"#### 📋 Relatório Detalhado de Atendimentos de **{nome_abastecedora_tab}**")
+                cols_detalhe = [
+                    c for c in [
+                        "Data Checkin", "Data Checkout", "Tempo de Visita", "Equipamento", 
+                        "Cliente", "Produto", "Endereço", "Responsável", "GPS Checkin", "GPS Checkout"
+                    ] if c in df_op.columns
+                ]
+                st.dataframe(df_op[cols_detalhe], use_container_width=True, hide_index=True)
+
+                # Mapa de Geolocalização do Abastecedor
+                st.markdown(f"#### 📍 Mapa de Roteiro e Locais Atendidos por **{nome_abastecedora_tab}**")
+                pontos_mapa = []
+                for _, row_g in df_op.iterrows():
+                    # Coleta coordenadas de checkin
+                    gps_in = str(row_g.get("GPS Checkin", "")).strip()
+                    if "," in gps_in and "não" not in gps_in.lower():
+                        try:
+                            pt = gps_in.split(",")
+                            pontos_mapa.append({
+                                "latitude": float(pt[0].strip()),
+                                "longitude": float(pt[1].strip()),
+                                "tipo": "Check-in",
+                                "cliente": row_g.get("Cliente", "")
+                            })
+                        except Exception:
+                            pass
+                    
+                    # Coleta coordenadas de checkout
+                    gps_out = str(row_g.get("GPS Checkout", "")).strip()
+                    if "," in gps_out and "não" not in gps_out.lower():
+                        try:
+                            pt2 = gps_out.split(",")
+                            pontos_mapa.append({
+                                "latitude": float(pt2[0].strip()),
+                                "longitude": float(pt2[1].strip()),
+                                "tipo": "Check-out",
+                                "cliente": row_g.get("Cliente", "")
+                            })
+                        except Exception:
+                            pass
+
+                if pontos_mapa:
+                    df_mapa_geo = pd.DataFrame(pontos_mapa)
+                    st.map(df_mapa_geo, latitude="latitude", longitude="longitude", size=25, color="#0D6EFD")
+                else:
+                    st.caption("ℹ️ Nenhuma coordenada GPS válida registrada para os filtros selecionados.")
+
+    # =========================================================
+    # PÁGINA 3: CENTRAL DE EXCLUSÃO DE REGISTROS
     # =========================================================
     elif pagina == "🗑️ Central de Exclusão de Registros":
         st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Central de Exclusão de Registros de Visita</p></div>', unsafe_allow_html=True)
@@ -374,7 +510,6 @@ def main():
 
         df_del = df_raw.copy()
 
-        # Busca rápida
         busca = st.text_input("🔍 Filtrar registros por Equipamento, Cliente ou Técnico:", placeholder="Ex: 6509, Thiago, Senac...").strip().lower()
         if busca:
             df_del = df_del[
@@ -386,8 +521,8 @@ def main():
 
         st.markdown(f"**Registros encontrados (ordenados por data de registro):** `{len(df_del)}`")
 
-        colunas_exibicao = [c for c in ["Linha_Planilha", "Data Checkin", "Equipamento", "Cliente", "Abastecedor", "Produto", "Responsável"] if c in df_del.columns]
-        st.dataframe(df_del[colunas_exibicao], use_container_width=True)
+        colunas_exibicao = [c for c in ["Linha_Planilha", "Data Checkin", "Tempo de Visita", "Equipamento", "Cliente", "Abastecedor", "Produto", "Responsável"] if c in df_del.columns]
+        st.dataframe(df_del[colunas_exibicao], use_container_width=True, hide_index=True)
 
         st.markdown("---")
         st.subheader("Excluir Registro da Planilha")
@@ -411,7 +546,6 @@ def main():
                 idx_escolhido = opcoes_del.index(item_selecionado)
                 registro_alvo = df_del_reset.iloc[idx_escolhido]
 
-                # Inspecionar fotos do registro selecionado
                 with st.expander("📷 Conferir Fotos e Assinatura deste Registro", expanded=True):
                     col_f1, col_f2, col_f3 = st.columns(3)
                     with col_f1:
@@ -440,6 +574,7 @@ def main():
                     <div class="danger-box">
                         <b>Confirmação de Exclusão:</b><br>
                         • <b>Data Check-in:</b> {registro_alvo.get('Data Checkin')}<br>
+                        • <b>Duração da Visita:</b> {registro_alvo.get('Tempo de Visita')}<br>
                         • <b>Equipamento:</b> {registro_alvo.get('Equipamento')}<br>
                         • <b>Cliente:</b> {registro_alvo.get('Cliente')}<br>
                         • <b>Linha na Planilha:</b> {registro_alvo.get('Linha_Planilha')}
