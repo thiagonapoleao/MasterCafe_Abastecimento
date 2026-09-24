@@ -61,13 +61,13 @@ WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8
 # -------------------------------------------------------------
 # 3. CARREGAMENTO DOS DADOS COM PARÂMETRO ANTI-CACHE
 # -------------------------------------------------------------
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=5)
 def carregar_dados_visitas(forcar_atualizacao=0):
     """Carrega os dados da aba Visitas com proteção anti-cache."""
     ts_nocache = int(datetime.now().timestamp())
     urls = [
-        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas&t={ts_nocache}",
-        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&sheet=Visitas&t={ts_nocache}"
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas&nocache={ts_nocache}",
+        f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&sheet=Visitas&nocache={ts_nocache}"
     ]
     
     df = None
@@ -126,11 +126,11 @@ def carregar_dados_visitas(forcar_atualizacao=0):
     return df
 
 def excluir_registro_completo(data_checkin, abastecedor, equipamento):
-    """Exclui da planilha Google via Webhook e remove do backup local em CSV."""
-    sucesso_planilha = False
-    msg_retorno = ""
+    """Envia requisição para exclusão na planilha Google e no arquivo CSV local."""
+    sucesso = False
+    mensagem = ""
 
-    # 1. Envia comando de exclusão para o Google Apps Script
+    # 1. Envio para o Webhook Google Apps Script
     try:
         payload = {
             "action": "delete",
@@ -143,7 +143,7 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento):
             WEBHOOK_URL,
             data=json.dumps(payload),
             headers=headers,
-            timeout=25,
+            timeout=30,
             allow_redirects=True
         )
 
@@ -151,43 +151,43 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento):
             try:
                 ret = res.json()
                 if ret.get("status") == "deleted":
-                    sucesso_planilha = True
-                    msg_retorno = "Linha excluída com sucesso na planilha Google!"
+                    sucesso = True
+                    mensagem = ret.get("message", "Excluído com sucesso da planilha!")
                 else:
-                    msg_retorno = ret.get("message", "Registro não encontrado na planilha.")
+                    mensagem = ret.get("message", "Registro não encontrado na planilha Google.")
             except Exception:
-                if "deleted" in res.text.lower() or "success" in res.text.lower():
-                    sucesso_planilha = True
-                    msg_retorno = "Linha excluída com sucesso!"
+                if "deleted" in res.text.lower():
+                    sucesso = True
+                    mensagem = "Excluído com sucesso da planilha!"
                 else:
-                    msg_retorno = f"Resposta do servidor: {res.text[:150]}"
+                    mensagem = f"Resposta: {res.text[:120]}"
         else:
-            msg_retorno = f"Erro HTTP {res.status_code}: {res.text[:120]}"
+            mensagem = f"Erro HTTP {res.status_code}: {res.text[:120]}"
     except Exception as e:
-        msg_retorno = f"Falha de conexão com o Webhook: {str(e)}"
+        mensagem = f"Falha de conexão: {str(e)}"
 
-    # 2. Remove também do arquivo local 'visitas_realizadas.csv' se existir
+    # 2. Exclusão no arquivo local de backup (visitas_realizadas.csv)
     if os.path.exists("visitas_realizadas.csv"):
         try:
             df_local = pd.read_csv("visitas_realizadas.csv", dtype=str)
             if not df_local.empty:
-                cond = True
-                if "data_checkin" in df_local.columns:
-                    cond = cond & (df_local["data_checkin"].astype(str).str.strip() != str(data_checkin).strip())
-                elif "Data Checkin" in df_local.columns:
-                    cond = cond & (df_local["Data Checkin"].astype(str).str.strip() != str(data_checkin).strip())
+                col_ch = "data_checkin" if "data_checkin" in df_local.columns else "Data Checkin"
+                col_eq = "equipamento" if "equipamento" in df_local.columns else "Equipamento"
 
-                if "equipamento" in df_local.columns:
-                    cond = cond & (df_local["equipamento"].astype(str).str.strip() != str(equipamento).strip())
-                elif "Equipamento" in df_local.columns:
-                    cond = cond & (df_local["Equipamento"].astype(str).str.strip() != str(equipamento).strip())
-
-                df_local_novo = df_local[cond]
-                df_local_novo.to_csv("visitas_realizadas.csv", index=False)
+                if col_ch in df_local.columns and col_eq in df_local.columns:
+                    mask = (
+                        (df_local[col_ch].astype(str).str.strip() == str(data_checkin).strip()) &
+                        (df_local[col_eq].astype(str).str.strip() == str(equipamento).strip())
+                    )
+                    df_novo = df_local[~mask]
+                    df_novo.to_csv("visitas_realizadas.csv", index=False)
+                    if not sucesso and mask.sum() > 0:
+                        sucesso = True
+                        mensagem = "Registro removido do arquivo local de backup."
         except Exception:
             pass
 
-    return sucesso_planilha, msg_retorno
+    return sucesso, mensagem
 
 # -------------------------------------------------------------
 # 4. INTERFACE PRINCIPAL DO DASHBOARD
@@ -355,7 +355,7 @@ def main():
     st.dataframe(df[colunas_visiveis], use_container_width=True)
 
     # ---------------------------------------------------------
-    # 8. INSPEÇÃO E EXCLUSÃO DEFINITIVA DO REGISTRO
+    # 8. INSPEÇÃO E EXCLUSÃO DO REGISTRO
     # ---------------------------------------------------------
     st.markdown("---")
     st.subheader("🔎 Inspecionar Fotos, Assinatura e Exclusão")
@@ -399,14 +399,14 @@ def main():
             else:
                 st.info("Sem assinatura registrada.")
 
-        # Bloco de exclusão com retorno detalhado
+        # Bloco de exclusão
         with st.expander("🗑️ Excluir este registro da planilha Google"):
             st.warning(
-                f"Você está prestes a excluir permanentemente o atendimento de "
-                f"**{registro.get('Cliente')}** (Equipamento: **{registro.get('Equipamento')}** - Check-in: **{registro.get('Data Checkin')}**)."
+                f"Tem certeza que deseja excluir o atendimento do cliente **{registro.get('Cliente')}** "
+                f"(Equipamento: **{registro.get('Equipamento')}** | Check-in: **{registro.get('Data Checkin')}**)?"
             )
             if st.button("Confirmar Exclusão Definitiva", type="primary", key=f"btn_del_{idx_selecionado}"):
-                with st.spinner("Excluindo registro da planilha Google..."):
+                with st.spinner("Removendo linha da planilha..."):
                     sucesso, msg = excluir_registro_completo(
                         registro.get("Data Checkin", ""),
                         registro.get("Abastecedor", ""),
@@ -414,12 +414,12 @@ def main():
                     )
 
                 if sucesso:
-                    st.success("✅ Registro excluído com sucesso da planilha Google!")
+                    st.success(f"✅ {msg}")
                     st.cache_data.clear()
                     st.session_state["refresh_counter"] += 1
                     st.rerun()
                 else:
-                    st.error(f"❌ Não foi possível excluir: {msg}")
+                    st.error(f"❌ {msg}")
 
     # ---------------------------------------------------------
     # 9. MAPA DE LOCALIZAÇÃO DOS ATENDIMENTOS
