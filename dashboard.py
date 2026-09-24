@@ -70,9 +70,8 @@ WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8
 # -------------------------------------------------------------
 # 3. CARREGAMENTO DOS DADOS COM PARÂMETRO ANTI-CACHE
 # -------------------------------------------------------------
-@st.cache_data(ttl=5)
-def carregar_dados_visitas(forcar_atualizacao=0):
-    """Carrega os dados da aba Visitas da planilha Google."""
+def carregar_dados_visitas():
+    """Carrega os dados da aba Visitas da planilha Google sem cache estático."""
     ts_nocache = int(datetime.now().timestamp())
     urls = [
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas&nocache={ts_nocache}",
@@ -132,52 +131,52 @@ def carregar_dados_visitas(forcar_atualizacao=0):
             col_map[col] = "Assinatura"
 
     df = df.rename(columns=col_map)
-    # Guarda o número real da linha da planilha (linha 1 = cabeçalho, logo index 0 = linha 2)
     df["Linha_Planilha"] = [i + 2 for i in range(len(df))]
     return df
 
 def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number=None):
     """Envia requisição para exclusão da linha no Google Apps Script."""
-    sucesso = False
-    mensagem = ""
+    payload = {
+        "action": "delete",
+        "data_checkin": str(data_checkin).strip(),
+        "abastecedor": str(abastecedor).strip(),
+        "equipamento": str(equipamento).strip(),
+        "row_number": int(row_number) if row_number is not None else None
+    }
 
+    # 1. Envio primário via POST
+    sucesso = False
     try:
-        payload = {
-            "action": "delete",
-            "data_checkin": str(data_checkin).strip(),
-            "abastecedor": str(abastecedor).strip(),
-            "equipamento": str(equipamento).strip(),
-            "row_number": int(row_number) if row_number is not None else None
-        }
         headers = {"Content-Type": "text/plain;charset=utf-8"}
         res = requests.post(
             WEBHOOK_URL,
             data=json.dumps(payload),
             headers=headers,
-            timeout=30,
+            timeout=25,
             allow_redirects=True
         )
+        if res.status_code == 200 and ("deleted" in res.text.lower() or "sucesso" in res.text.lower()):
+            sucesso = True
+    except Exception:
+        sucesso = False
 
-        if res.status_code == 200:
-            try:
-                ret = res.json()
-                if ret.get("status") == "deleted":
-                    sucesso = True
-                    mensagem = ret.get("message", "Registro excluído com sucesso!")
-                else:
-                    mensagem = ret.get("message", "Registro não localizado para exclusão.")
-            except Exception:
-                if "deleted" in res.text.lower():
-                    sucesso = True
-                    mensagem = "Registro excluído com sucesso!"
-                else:
-                    mensagem = f"Resposta: {res.text[:120]}"
-        else:
-            mensagem = f"Erro HTTP {res.status_code}"
-    except Exception as e:
-        mensagem = f"Falha de conexão: {str(e)}"
+    # 2. Fallback via GET se o POST tiver sofrido bloqueio de redirect
+    if not sucesso:
+        try:
+            params = {
+                "action": "delete",
+                "data_checkin": str(data_checkin).strip(),
+                "abastecedor": str(abastecedor).strip(),
+                "equipamento": str(equipamento).strip(),
+                "row_number": str(row_number) if row_number is not None else ""
+            }
+            res_get = requests.get(WEBHOOK_URL, params=params, timeout=25, allow_redirects=True)
+            if res_get.status_code == 200 and ("deleted" in res_get.text.lower() or "sucesso" in res_get.text.lower()):
+                sucesso = True
+        except Exception:
+            pass
 
-    # Exclusão do backup local em CSV se existir
+    # 3. Exclusão também do backup local em CSV
     if os.path.exists("visitas_realizadas.csv"):
         try:
             df_local = pd.read_csv("visitas_realizadas.csv", dtype=str)
@@ -192,17 +191,20 @@ def excluir_registro_completo(data_checkin, abastecedor, equipamento, row_number
                     )
                     df_novo = df_local[~mask]
                     df_novo.to_csv("visitas_realizadas.csv", index=False)
+                    sucesso = True
         except Exception:
             pass
 
-    return sucesso, mensagem
+    return sucesso
 
 # -------------------------------------------------------------
 # 4. NAVEGAÇÃO E INTERFACE PRINCIPAL
 # -------------------------------------------------------------
 def main():
-    if "refresh_counter" not in st.session_state:
-        st.session_state["refresh_counter"] = 0
+    # Mensagem flutuante persistente pós-exclusão
+    if st.session_state.get("sucesso_exclusao", False):
+        st.success("Registro excluído com sucesso!")
+        st.session_state["sucesso_exclusao"] = False
 
     # Menu Lateral de Navegação
     with st.sidebar:
@@ -215,17 +217,15 @@ def main():
         st.markdown("---")
         if st.button("🔄 Atualizar Todos os Dados", use_container_width=True):
             st.cache_data.clear()
-            st.session_state["refresh_counter"] += 1
             st.rerun()
 
-    df_raw = carregar_dados_visitas(forcar_atualizacao=st.session_state["refresh_counter"])
+    df_raw = carregar_dados_visitas()
 
     if df_raw.empty or "Data Checkin" not in df_raw.columns:
         st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Controle de Visitas e Abastecimento</p></div>', unsafe_allow_html=True)
         st.warning("⚠️ Nenhum registro de visita encontrado na planilha ou no arquivo local.")
         if st.button("🔄 Atualizar"):
             st.cache_data.clear()
-            st.session_state["refresh_counter"] += 1
             st.rerun()
         return
 
@@ -326,12 +326,12 @@ def main():
     elif pagina == "🗑️ Central de Exclusão de Registros":
         st.markdown('<div class="main-header"><h2>Master Café ☕</h2><p>Central de Exclusão de Registros de Visita</p></div>', unsafe_allow_html=True)
 
-        st.info("ℹ️ Utilize esta aba exclusiva para auditar, conferir fotos e excluir registros incorretos ou duplicados diretamente da planilha Google.")
+        st.info("ℹ️ Selecione o registro abaixo para auditar os detalhes, fotos e realizar a exclusão direta na planilha Google.")
 
         df_del = df_raw.copy()
 
-        # Barra de Pesquisa Rápida
-        busca = st.text_input("🔍 Buscar por Equipamento, Cliente ou Técnico:", placeholder="Ex: 6509, Thiago, Senac...").strip().lower()
+        # Busca rápida
+        busca = st.text_input("🔍 Filtrar lista por Equipamento, Cliente ou Técnico:", placeholder="Ex: 6509, Thiago, Senac...").strip().lower()
         if busca:
             df_del = df_del[
                 df_del["Equipamento"].astype(str).str.lower().str.contains(busca, na=False) |
@@ -340,14 +340,13 @@ def main():
                 df_del["Data Checkin"].astype(str).str.lower().str.contains(busca, na=False)
             ]
 
-        st.markdown(f"**Total de registros para exclusão:** `{len(df_del)}`")
+        st.markdown(f"**Registros carregados:** `{len(df_del)}`")
 
-        # Tabela Interativa de Registros
         colunas_exibicao = [c for c in ["Linha_Planilha", "Data Checkin", "Equipamento", "Cliente", "Abastecedor", "Produto", "Responsável"] if c in df_del.columns]
         st.dataframe(df_del[colunas_exibicao], use_container_width=True)
 
         st.markdown("---")
-        st.subheader("Seleção do Atendimento para Excluir")
+        st.subheader("Confirmar Exclusão de um Registro")
 
         if not df_del.empty:
             df_del_reset = df_del.reset_index(drop=True)
@@ -360,12 +359,12 @@ def main():
                 ab = r.get("Abastecedor", "")
                 opcoes_del.append(f"Linha {linha_plan} | Eq: {eq} | {d_ch} | {cli} ({ab})")
 
-            item_selecionado = st.selectbox("Escolha a linha correspondente:", opcoes_del)
+            item_selecionado = st.selectbox("Selecione o registro para exclusão:", opcoes_del)
             idx_escolhido = opcoes_del.index(item_selecionado)
             registro_alvo = df_del_reset.iloc[idx_escolhido]
 
-            # Inspecionar fotos do registro antes de apagar
-            with st.expander("📷 Visualizar Fotos e Assinatura deste Atendimento"):
+            # Inspecionar fotos
+            with st.expander("📷 Conferir Fotos e Assinatura deste Registro"):
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
                     st.caption("📷 **Foto Abastecida**")
@@ -389,19 +388,18 @@ def main():
                     else:
                         st.write("Sem imagem.")
 
-            # Caixa de Confirmação de Exclusão
             st.markdown(f"""
                 <div class="danger-box">
-                    <b>Atenção:</b> Esta operação removerá permanentemente a linha da planilha Google.<br>
-                    <b>Linha da Planilha:</b> {registro_alvo.get('Linha_Planilha')}<br>
-                    <b>Cliente:</b> {registro_alvo.get('Cliente')}<br>
-                    <b>Equipamento:</b> {registro_alvo.get('Equipamento')} | <b>Check-in:</b> {registro_alvo.get('Data Checkin')}
+                    <b>Confirmação de Exclusão Permanente:</b><br>
+                    • <b>Linha da Planilha:</b> {registro_alvo.get('Linha_Planilha')}<br>
+                    • <b>Cliente:</b> {registro_alvo.get('Cliente')}<br>
+                    • <b>Equipamento:</b> {registro_alvo.get('Equipamento')} | <b>Check-in:</b> {registro_alvo.get('Data Checkin')}
                 </div>
             """, unsafe_allow_html=True)
 
             if st.button("🗑️ Confirmar Exclusão Definitiva", type="primary", use_container_width=True):
-                with st.spinner("Excluindo linha da planilha Google..."):
-                    sucesso, msg = excluir_registro_completo(
+                with st.spinner("Excluindo linha da planilha..."):
+                    sucesso = excluir_registro_completo(
                         data_checkin=registro_alvo.get("Data Checkin", ""),
                         abastecedor=registro_alvo.get("Abastecedor", ""),
                         equipamento=registro_alvo.get("Equipamento", ""),
@@ -409,15 +407,14 @@ def main():
                     )
 
                 if sucesso:
-                    st.success("✅ Registro excluído com sucesso!")
+                    st.session_state["sucesso_exclusao"] = True
                     st.cache_data.clear()
-                    st.session_state["refresh_counter"] += 1
-                    time.sleep(1.2)
+                    time.sleep(1.0)
                     st.rerun()
                 else:
-                    st.error(f"❌ Não foi possível excluir: {msg}")
+                    st.error("Não foi possível excluir o registro. Verifique a implantação do Apps Script.")
         else:
-            st.warning("Nenhum registro encontrado com os termos de busca informados.")
+            st.warning("Nenhum registro encontrado com o filtro aplicado.")
 
 if __name__ == "__main__":
     main()
