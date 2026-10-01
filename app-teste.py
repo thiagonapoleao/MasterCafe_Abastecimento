@@ -20,8 +20,8 @@ from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
 
 def obter_data_hora_brasil():
-    """Retorna a data e hora atual no fuso horário oficial de Brasília (America/Sao_Paulo)."""
-    return datetime.now(FUSO_BRASIL).strftime("%Y-%m-%d %H:%M:%S")
+    """Retorna a data e hora atual no fuso horário oficial de Brasília formatada em PT-BR (DD/MM/AAAA HH:MM:SS)."""
+    return datetime.now(FUSO_BRASIL).strftime("%d/%m/%Y %H:%M:%S")
 
 # -------------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA E ESTILO VISUAL (DARK MODE)
