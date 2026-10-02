@@ -79,13 +79,47 @@ WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbwQJfe1H2OHTAYGOPZhoOGRl8
 # -------------------------------------------------------------
 # 3. FUNÇÕES AUXILIARES DE CÁLCULO E DADOS
 # -------------------------------------------------------------
+def converter_data_ptbr(valor_data):
+    """
+    Converte com precisão strings de data para datetime, priorizando estritamente
+    o formato brasileiro (dia primeiro) para evitar inversão entre dia e mês
+    (exemplo: '01/08/2024' ser interpretado erroneamente como 8 de janeiro).
+    """
+    if pd.isna(valor_data):
+        return pd.NaT
+    
+    val_str = str(valor_data).strip()
+    if not val_str or val_str.lower() in ["nan", "none", "nat"]:
+        return pd.NaT
+
+    # Formatos explícitos comuns
+    formatos = [
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d"
+    ]
+    for fmt in formatos:
+        try:
+            return pd.to_datetime(val_str, format=fmt, exact=False)
+        except Exception:
+            continue
+
+    # Fallback garantindo dia antes do mês
+    try:
+        return pd.to_datetime(val_str, dayfirst=True, errors="coerce")
+    except Exception:
+        return pd.NaT
+
 def formatar_duracao(inicio_str, fim_str):
     """Calcula o tempo de permanência da visita."""
     try:
         if not inicio_str or not fim_str:
             return "Em andamento"
-        dt_in = pd.to_datetime(inicio_str, errors="coerce", dayfirst=True, format="mixed")
-        dt_out = pd.to_datetime(fim_str, errors="coerce", dayfirst=True, format="mixed")
+        dt_in = converter_data_ptbr(inicio_str)
+        dt_out = converter_data_ptbr(fim_str)
         if pd.isna(dt_in) or pd.isna(dt_out):
             return "Não registrado"
         delta = dt_out - dt_in
@@ -102,7 +136,7 @@ def formatar_duracao(inicio_str, fim_str):
         return "Não registrado"
 
 def carregar_dados_visitas():
-    """Carrega os dados da aba Visitas da planilha Google garantindo ordenação cronológica."""
+    """Carrega os dados da aba Visitas da planilha Google garantindo ordenação cronológica e meses corretos."""
     ts_nocache = int(datetime.now().timestamp())
     urls = [
         f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Visitas&nocache={ts_nocache}",
@@ -164,7 +198,8 @@ def carregar_dados_visitas():
     df = df.rename(columns=col_map)
     df["Linha_Planilha"] = [i + 2 for i in range(len(df))]
 
-    df["dt_ordem"] = pd.to_datetime(df["Data Checkin"], errors="coerce", dayfirst=True, format="mixed")
+    # Conversão rigorosa com formato brasileiro
+    df["dt_ordem"] = df["Data Checkin"].apply(converter_data_ptbr)
     df = df.sort_values(by="dt_ordem", ascending=False).reset_index(drop=True)
 
     df["Tempo de Visita"] = df.apply(
@@ -256,7 +291,7 @@ def main():
             [
                 "📊 Dashboard Geral", 
                 "👤 Visitas por Abastecedora", 
-                "🗑️ Central de Exclusão de Registros"
+                "🗑️️ Central de Exclusão de Registros"
             ],
             index=0
         )
