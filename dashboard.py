@@ -6,6 +6,10 @@ import json
 import os
 import plotly.express as px
 import time
+import base64
+import re
+import io
+from PIL import Image
 
 # -------------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA E ESTILO VISUAL (DARK MODE)
@@ -92,7 +96,6 @@ def converter_data_ptbr(valor_data):
     if not val_str or val_str.lower() in ["nan", "none", "nat"]:
         return pd.NaT
 
-    # Formatos explícitos comuns
     formatos = [
         "%d/%m/%Y %H:%M:%S",
         "%d/%m/%Y %H:%M",
@@ -107,7 +110,6 @@ def converter_data_ptbr(valor_data):
         except Exception:
             continue
 
-    # Fallback garantindo dia antes do mês
     try:
         return pd.to_datetime(val_str, dayfirst=True, errors="coerce")
     except Exception:
@@ -134,6 +136,51 @@ def formatar_duracao(inicio_str, fim_str):
         return f"{minutos}m {segundos}s"
     except Exception:
         return "Não registrado"
+
+def renderizar_imagem_comprovante(dado_img, msg_vazio="Sem imagem registrada.", container_width=True):
+    """
+    Renderiza fotos e assinaturas com suporte total a:
+    1. URLs do Google Drive (convertendo para link de imagem direto)
+    2. URLs web padrão (http/https)
+    3. Strings Base64 puras ou com cabeçalho data:image/...
+    """
+    if pd.isna(dado_img):
+        st.info(msg_vazio)
+        return
+
+    val = str(dado_img).strip()
+    if not val or val.lower() in ["nan", "none", "", "null"]:
+        st.info(msg_vazio)
+        return
+
+    # Tratamento para Links do Google Drive
+    if "drive.google.com" in val:
+        match_id = re.search(r'[-\w]{25,}', val)
+        if match_id:
+            file_id = match_id.group(0)
+            url_direta = f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
+            st.image(url_direta, use_container_width=container_width)
+            return
+
+    # Tratamento para URLs web padrão
+    if val.startswith("http://") or val.startswith("https://"):
+        st.image(val, use_container_width=container_width)
+        return
+
+    # Tratamento para imagens em Base64 (comum na assinatura)
+    try:
+        b64_str = val
+        if "," in b64_str:
+            b64_str = b64_str.split(",", 1)[1]
+        
+        img_bytes = base64.b64decode(b64_str)
+        img = Image.open(io.BytesIO(img_bytes))
+        st.image(img, use_container_width=container_width)
+        return
+    except Exception:
+        pass
+
+    st.info(msg_vazio)
 
 def carregar_dados_visitas():
     """Carrega os dados da aba Visitas da planilha Google garantindo ordenação cronológica e meses corretos."""
@@ -198,7 +245,7 @@ def carregar_dados_visitas():
     df = df.rename(columns=col_map)
     df["Linha_Planilha"] = [i + 2 for i in range(len(df))]
 
-    # Conversão rigorosa com formato brasileiro
+    # Conversão com formato brasileiro
     df["dt_ordem"] = df["Data Checkin"].apply(converter_data_ptbr)
     df = df.sort_values(by="dt_ordem", ascending=False).reset_index(drop=True)
 
@@ -291,7 +338,7 @@ def main():
             [
                 "📊 Dashboard Geral", 
                 "👤 Visitas por Abastecedora", 
-                "🗑️️ Central de Exclusão de Registros"
+                "🗑️ Central de Exclusão de Registros"
             ],
             index=0
         )
@@ -377,7 +424,6 @@ def main():
         col_bar_mes, col_bar_dia = st.columns(2)
 
         with col_bar_mes:
-            # Gráfico de Atendimentos por Mês
             df_mes_base = df_raw.copy()
             if sel_abast_g != "Todos":
                 df_mes_base = df_mes_base[df_mes_base["Abastecedor"] == sel_abast_g]
@@ -410,7 +456,6 @@ def main():
             st.plotly_chart(fig_bar_m, use_container_width=True)
 
         with col_bar_dia:
-            # Gráfico de Atendimentos por Dia e Abastecedora
             df_dia_base = df_raw[df_raw["dt_ordem"].notna()].copy()
             if sel_mes_g != "Todos":
                 df_dia_base = df_dia_base[df_dia_base["Mês"] == sel_mes_g]
@@ -485,31 +530,19 @@ def main():
                             </div>
                         """, unsafe_allow_html=True)
 
-                    # Fotos e Assinatura
+                    # Fotos e Assinatura com suporte a Link e Base64
                     cf1, cf2, cf3 = st.columns(3)
                     with cf1:
                         st.caption("📷 **Máquina Abastecida**")
-                        u_ab = str(r.get("Foto Abastecida", "")).strip()
-                        if u_ab.startswith("http"):
-                            st.image(u_ab, use_container_width=True)
-                        else:
-                            st.info("Sem foto abastecida.")
+                        renderizar_imagem_comprovante(r.get("Foto Abastecida"), "Sem foto abastecida.")
 
                     with cf2:
                         st.caption("✨ **Máquina Limpa**")
-                        u_li = str(r.get("Foto Limpa", "")).strip()
-                        if u_li.startswith("http"):
-                            st.image(u_li, use_container_width=True)
-                        else:
-                            st.info("Sem foto de limpeza.")
+                        renderizar_imagem_comprovante(r.get("Foto Limpa"), "Sem foto de limpeza.")
 
                     with cf3:
                         st.caption("✍️ **Assinatura do Responsável**")
-                        u_as = str(r.get("Assinatura", "")).strip()
-                        if u_as.startswith("http"):
-                            st.image(u_as, use_container_width=True)
-                        else:
-                            st.info("Sem assinatura.")
+                        renderizar_imagem_comprovante(r.get("Assinatura"), "Sem assinatura.")
         else:
             st.warning("Nenhum atendimento localizado com os filtros selecionados.")
 
@@ -548,25 +581,13 @@ def main():
             ci1, ci2, ci3 = st.columns(3)
             with ci1:
                 st.caption("📷 **Foto Abastecida**")
-                u_ab = str(reg_insp.get("Foto Abastecida", "")).strip()
-                if u_ab.startswith("http"):
-                    st.image(u_ab, use_container_width=True)
-                else:
-                    st.info("Sem foto registrada.")
+                renderizar_imagem_comprovante(reg_insp.get("Foto Abastecida"), "Sem foto registrada.")
             with ci2:
                 st.caption("✨ **Foto Limpa**")
-                u_li = str(reg_insp.get("Foto Limpa", "")).strip()
-                if u_li.startswith("http"):
-                    st.image(u_li, use_container_width=True)
-                else:
-                    st.info("Sem foto registrada.")
+                renderizar_imagem_comprovante(reg_insp.get("Foto Limpa"), "Sem foto registrada.")
             with ci3:
                 st.caption("✍️ **Assinatura**")
-                u_as = str(reg_insp.get("Assinatura", "")).strip()
-                if u_as.startswith("http"):
-                    st.image(u_as, use_container_width=True)
-                else:
-                    st.info("Sem assinatura registrada.")
+                renderizar_imagem_comprovante(reg_insp.get("Assinatura"), "Sem assinatura registrada.")
 
     # =========================================================
     # PÁGINA 2: VISITAS POR ABASTECEDORA COM FILTROS E MAPA
@@ -653,25 +674,13 @@ def main():
                     cfa, cfb, cfc = st.columns(3)
                     with cfa:
                         st.caption("📷 **Foto Abastecida**")
-                        u1 = str(rf.get("Foto Abastecida", "")).strip()
-                        if u1.startswith("http"):
-                            st.image(u1, use_container_width=True)
-                        else:
-                            st.info("Sem foto abastecida.")
+                        renderizar_imagem_comprovante(rf.get("Foto Abastecida"), "Sem foto abastecida.")
                     with cfb:
                         st.caption("✨ **Foto Limpa**")
-                        u2 = str(rf.get("Foto Limpa", "")).strip()
-                        if u2.startswith("http"):
-                            st.image(u2, use_container_width=True)
-                        else:
-                            st.info("Sem foto de limpeza.")
+                        renderizar_imagem_comprovante(rf.get("Foto Limpa"), "Sem foto de limpeza.")
                     with cfc:
                         st.caption("✍️ **Assinatura**")
-                        u3 = str(rf.get("Assinatura", "")).strip()
-                        if u3.startswith("http"):
-                            st.image(u3, use_container_width=True)
-                        else:
-                            st.info("Sem assinatura.")
+                        renderizar_imagem_comprovante(rf.get("Assinatura"), "Sem assinatura.")
 
             # Mapa de Roteiro
             st.markdown(f"#### 📍 Mapa de Roteiro e Locais Atendidos {titulo_operador}")
@@ -760,25 +769,13 @@ def main():
                     col_f1, col_f2, col_f3 = st.columns(3)
                     with col_f1:
                         st.caption("📷 **Foto Abastecida**")
-                        u_ab = str(registro_alvo.get("Foto Abastecida", "")).strip()
-                        if u_ab.startswith("http"):
-                            st.image(u_ab, use_container_width=True)
-                        else:
-                            st.write("Sem foto.")
+                        renderizar_imagem_comprovante(registro_alvo.get("Foto Abastecida"), "Sem foto.")
                     with col_f2:
                         st.caption("✨ **Foto Limpa**")
-                        u_li = str(registro_alvo.get("Foto Limpa", "")).strip()
-                        if u_li.startswith("http"):
-                            st.image(u_li, use_container_width=True)
-                        else:
-                            st.write("Sem foto.")
+                        renderizar_imagem_comprovante(registro_alvo.get("Foto Limpa"), "Sem foto.")
                     with col_f3:
                         st.caption("✍️ **Assinatura**")
-                        u_as = str(registro_alvo.get("Assinatura", "")).strip()
-                        if u_as.startswith("http"):
-                            st.image(u_as, use_container_width=True)
-                        else:
-                            st.write("Sem assinatura.")
+                        renderizar_imagem_comprovante(registro_alvo.get("Assinatura"), "Sem assinatura.")
 
                 st.markdown(f"""
                     <div class="danger-box">
