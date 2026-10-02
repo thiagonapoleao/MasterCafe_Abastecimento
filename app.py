@@ -14,14 +14,30 @@ import requests
 import json
 import base64
 from PIL import Image
+import numpy as np
 import io
 import streamlit.components.v1 as components
 from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import get_geolocation
 
 def obter_data_hora_brasil():
-    """Retorna a data e hora atual no fuso horário oficial de Brasília (America/Sao_Paulo)."""
-    return datetime.now(FUSO_BRASIL).strftime("%Y-%m-%d %H:%M:%S")
+    """Retorna a data e hora atual no fuso horário oficial de Brasília formatada em PT-BR (DD/MM/AAAA HH:MM:SS)."""
+    return datetime.now(FUSO_BRASIL).strftime("%d/%m/%Y %H:%M:%S")
+
+def padronizar_data_ptbr(valor_data):
+    """
+    Garante que qualquer data (ISO YYYY-MM-DD ou PT-BR DD/MM/YYYY) seja
+    corretamente interpretada com dia primeiro (dayfirst=True).
+    """
+    if pd.isna(valor_data) or not str(valor_data).strip():
+        return ""
+    try:
+        data_convertida = pd.to_datetime(valor_data, dayfirst=True, errors="coerce")
+        if pd.notna(data_convertida):
+            return data_convertida.strftime("%d/%m/%Y %H:%M:%S")
+        return str(valor_data).strip()
+    except Exception:
+        return str(valor_data).strip()
 
 # -------------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA E ESTILO VISUAL (DARK MODE)
@@ -35,6 +51,20 @@ st.set_page_config(
 
 st.markdown("""
     <style>
+        /* Mantém o #MainMenu (três pontos) visível e oculta apenas Git, Share, Lápis/Editar e Rodapé */
+        #MainMenu {visibility: visible !important;}
+        footer {visibility: hidden; display: none !important;}
+        .stDeployButton {display: none !important;}
+        [data-testid="stToolbarActions"] {display: none !important;}
+        [data-testid="stDecoration"] {display: none !important;}
+        [data-testid="manage-app-button"] {display: none !important;}
+        .viewerBadge_container__1QSob {display: none !important;}
+        div[class^="viewerBadge"] {display: none !important;}
+        div[class^="StatusWidget"] {display: none !important;}
+        button[title="Share this app"] {display: none !important;}
+        button[title="Fork this app"] {display: none !important;}
+        button[title="Edit this app"] {display: none !important;}
+
         .stApp {
             background-color: #0F172A;
             color: #F8FAFC;
@@ -219,6 +249,33 @@ def comprimir_imagem(buffer_arquivo, max_largura=900, qualidade=70):
     except Exception:
         return ""
 
+def processar_assinatura_canvas(canvas_obj):
+    """
+    Renderiza os traços da assinatura sobre um fundo branco sólido (RGB),
+    eliminando a transparência nula (alfa 0) e gerando um Base64 JPEG válido para o Google Drive.
+    """
+    try:
+        if canvas_obj is None or canvas_obj.image_data is None:
+            return ""
+
+        raw_data = canvas_obj.image_data
+        if isinstance(raw_data, np.ndarray):
+            raw_data = raw_data.astype('uint8')
+        else:
+            raw_data = np.array(raw_data, dtype='uint8')
+
+        img_rgba = Image.fromarray(raw_data, mode="RGBA")
+
+        # Cria fundo branco opaco com o mesmo tamanho
+        fundo_branco = Image.new("RGB", img_rgba.size, (255, 255, 255))
+        fundo_branco.paste(img_rgba, mask=img_rgba.split()[3])
+
+        saida = io.BytesIO()
+        fundo_branco.save(saida, format="JPEG", quality=90, optimize=True)
+        return base64.b64encode(saida.getvalue()).decode("utf-8")
+    except Exception:
+        return ""
+
 @st.cache_data(ttl=60)
 def carregar_usuarios():
     urls = [
@@ -374,7 +431,6 @@ def tela_login(df_usuarios):
                 st.session_state["autenticado"] = True
                 st.session_state["usuario_logado"] = usuario_digitado
                 st.session_state["nome_abastecedor"] = nome_colaborador
-                # Grava nos parâmetros de URL para persistir o login mesmo com Refresh
                 st.query_params["u"] = usuario_digitado
                 st.rerun()
             else:
@@ -408,6 +464,8 @@ def main():
     if "visita_ativa" not in st.session_state or not st.session_state["visita_ativa"]:
         visita_recuperada = carregar_visita_em_andamento(usuario_atual)
         if visita_recuperada:
+            if "data_checkin" in visita_recuperada:
+                visita_recuperada["data_checkin"] = padronizar_data_ptbr(visita_recuperada["data_checkin"])
             st.session_state["visita_ativa"] = True
             st.session_state["dados_visita"] = visita_recuperada
         else:
@@ -499,7 +557,6 @@ def main():
                     "geo_checkin": f"{lat}, {lon}"
                 }
 
-                # Salva o atendimento em andamento para não perder com F5 / Refresh
                 salvar_visita_em_andamento(usuario_atual, dados_checkin)
                 st.session_state["visita_ativa"] = True
                 st.session_state["dados_visita"] = dados_checkin
@@ -510,6 +567,7 @@ def main():
     # ---------------------------------------------------------
     else:
         dados = st.session_state["dados_visita"]
+        data_checkin_exibicao = padronizar_data_ptbr(dados.get('data_checkin', ''))
 
         st.markdown(f"""
             <div class="status-box">
@@ -517,7 +575,7 @@ def main():
                 <b>Cliente:</b> {dados.get('cliente')}<br>
                 <b>Máquina:</b> {dados.get('produto')} (Nº {dados.get('equipamento')})<br>
                 <b>Endereço:</b> {dados.get('endereco')}<br>
-                <b>Check-in:</b> {dados.get('data_checkin')} | <b>GPS:</b> {dados.get('geo_checkin')}
+                <b>Check-in:</b> {data_checkin_exibicao} | <b>GPS:</b> {dados.get('geo_checkin')}
             </div>
         """, unsafe_allow_html=True)
 
@@ -536,11 +594,11 @@ def main():
         st.caption("Assine no quadro abaixo:")
         canvas_result = st_canvas(
             fill_color="rgba(255, 255, 255, 0)",
-            stroke_width=2,
+            stroke_width=3,
             stroke_color="#0D6EFD",
             background_color="#FFFFFF",
-            height=130,
-            width=340,
+            height=140,
+            width=360,
             drawing_mode="freedraw",
             key="canvas_assinatura"
         )
@@ -554,7 +612,6 @@ def main():
             btn_checkout = st.button("🏁 Realizar Check-out e Concluir")
 
         with col_cancelar:
-            # Opção de segurança caso o operador queira cancelar o atendimento em aberto
             with st.expander("⚠️ Cancelar Atendimento"):
                 if st.button("Descartar Check-in"):
                     limpar_visita_em_andamento(usuario_atual)
@@ -582,6 +639,7 @@ def main():
                 lat_out = coords["latitude"] if coords else "GPS não detectado"
                 lon_out = coords["longitude"] if coords else "GPS não detectado"
 
+                dados["data_checkin"] = padronizar_data_ptbr(dados.get("data_checkin", obter_data_hora_brasil()))
                 dados["data_checkout"] = obter_data_hora_brasil()
                 dados["geo_checkout"] = f"{lat_out}, {lon_out}"
                 dados["responsavel"] = responsavel
@@ -589,15 +647,7 @@ def main():
                 with st.spinner("Enviando dados e imagens para a planilha e Google Drive..."):
                     dados["foto_abastecida_b64"] = comprimir_imagem(foto_abastecida, max_largura=900, qualidade=70)
                     dados["foto_limpa_b64"] = comprimir_imagem(foto_limpa, max_largura=900, qualidade=70)
-
-                    try:
-                        img_array = canvas_result.image_data.astype('uint8')
-                        img_pil = Image.fromarray(img_array)
-                        buf = io.BytesIO()
-                        img_pil.save(buf, format="PNG")
-                        dados["assinatura_b64"] = base64.b64encode(buf.getvalue()).decode("utf-8")
-                    except Exception:
-                        dados["assinatura_b64"] = ""
+                    dados["assinatura_b64"] = processar_assinatura_canvas(canvas_result)
 
                     sucesso, msg = salvar_visita_na_planilha(dados)
 
